@@ -1,0 +1,6 @@
+[project]
+name = "funnel"
+version = "0.0.1"
+description = "Utilities for constructing data filtering funnels, in conjunction with Northeastern's Discovery"
+dependencies = [
+]
