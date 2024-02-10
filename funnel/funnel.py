@@ -55,8 +55,6 @@ class Step:
 
     def process_item(self, item, i):
         output = self.item(item, i)
-        # we'll only get here if Reject isn't raised (that's handled by Funnel).
-        self.valid_items += 1
         if self.output == "object":
             if output is None:
                 raise Exception(
@@ -70,6 +68,9 @@ class Step:
                 f.write(output)
         # for output == "path", the step is responsible for writing to
         # output_path itself
+
+        # we'll only get here if Reject isn't raised (that's handled by Funnel).
+        self.valid_items += 1
 
 
 class InputStep(Step):
@@ -92,6 +93,7 @@ class FilterStep(Step):
     def item(self, item, i):
         if not self.filter(item):
             raise Reject()
+        return item
 
     @abstractmethod
     def filter(self, item):
@@ -190,6 +192,7 @@ class Funnel:
                     step.process_item(val, i)
                 except Reject:
                     rejected.append(i)
+                    i += 1
                     continue
                 items.append(i)
                 i += 1
