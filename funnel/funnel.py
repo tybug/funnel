@@ -12,17 +12,6 @@ class Reject(Exception):
     """
 
 
-# a step takes as input one of:
-# - nothing
-# - python object (repo name as string)
-# - path to file / directory (cloned repository)
-#
-# and returns as output one of:
-# - "invalid" (discard this item)
-# - python object
-# - path to file / directory
-
-
 @dataclass
 class Run:
     started_at: datetime
@@ -70,7 +59,9 @@ class Step:
         self.valid_items += 1
         if self.output == "object":
             if output is None:
-                raise Exception('Step must return a value from item() for output == "object"')
+                raise Exception(
+                    'Step must return a value from item() for output == "object"'
+                )
 
             output = json.dumps(output)
             # use valid_items as it ensures sequentially ordering when filtering,
