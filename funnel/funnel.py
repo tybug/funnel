@@ -307,7 +307,7 @@ class Funnel:
                     with NamedTemporaryFile(mode="w+", suffix=".sh", delete=False) as f:
                         print(f"batch script for {step.name} at {f.name}")
                         f.write(array_job)
-                    process = subprocess.Popen(["sbatch", "--wait", f.name], capture_output=True)
+                    process = subprocess.Popen(["sbatch", "--wait", f.name])
                     process.wait()
                     # even though we told it to wait until all tasks finished with
                     # --wait, let's give it a bit longer to clean up, just in case.
