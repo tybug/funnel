@@ -307,22 +307,11 @@ class Funnel:
                     with NamedTemporaryFile(mode="w+", suffix=".sh", delete=False) as f:
                         print(f"batch script for {step.name} at {f.name}")
                         f.write(array_job)
-                    subprocess.Popen(["sbatch", f.name])
-
-                    while True:
-                        time.sleep(15)
-                        # piping to grep is annoying without shell=True. Should
-                        # probably use proper subprocess.Pipe at some point for
-                        # security though.
-
-                        # by default the name is truncated to 8 chars. Override
-                        # the format with %j (name) to show the full name. Also
-                        # avoids false positives with grep
-                        process = subprocess.run(f"squeue -u {user} --format %j | grep {step.name}", shell=True)
-                        # grep found something iff returncode is 0
-                        if process.returncode != 0:
-                            # grep didn't find anything, so the batch job finished.
-                            break
+                    process = subprocess.Popen(["sbatch", "--wait", f.name], capture_output=True)
+                    process.wait()
+                    # even though we told it to wait until all tasks finished with
+                    # --wait, let's give it a bit longer to clean up, just in case.
+                    time.sleep(1)
                 else:
                     # we're already inside a batch job and need to process a specific
                     # item on this step.
