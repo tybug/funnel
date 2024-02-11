@@ -294,7 +294,7 @@ class Funnel:
                         #SBATCH --job-name {step.name}
                         #SBATCH --nodes 1
                         #SBATCH --ntasks 1
-                        #SBATCH --array={array_str}%50   # array description (% is num simultaneous jobs, max 50)
+                        #SBATCH --array={array_str}  # array description (% is num simultaneous jobs, max 50)
                         #SBATCH -o /scratch/{user}/output_%A_%a.txt
                         #SBATCH -e /scratch/{user}/error_%A_%a.txt
 
@@ -302,6 +302,7 @@ class Funnel:
                     """
                     array_job = textwrap.dedent(array_job).strip()
                     with NamedTemporaryFile(mode="w+", suffix=".sh", delete=False) as f:
+                        print(f"writing batch script to {f.name}")
                         f.write(array_job)
                     subprocess.Popen(["sbatch", f.name])
 
