@@ -10,6 +10,7 @@ import textwrap
 from tempfile import NamedTemporaryFile
 import subprocess
 import time
+from typing import List
 import getpass
 
 from funnel.utils import highest_numbered_file
@@ -31,7 +32,7 @@ COPY = object()
 class Run:
     started_at: datetime
     ended_at: datetime
-    items: list[Any]
+    items: List[Any]
 
 
 class Step:
@@ -69,10 +70,10 @@ class Step:
         return self.storage_dir / f"{i}"
 
     def add_metadata(self, metadata):
-        self.metadata |= metadata
+        self.metadata = {**metadata, **self.metadata}
 
     def _write_metadata(self, metadata, i):
-        metadata = metadata | {"metadata": self.metadata}
+        metadata = {"metadata": self.metadata, **metadata}
         self.metadata_dir.mkdir(exist_ok=True)
         with open(self.metadata_dir / f"{i}", "w+") as f:
             v = json.dumps(metadata)
@@ -336,7 +337,7 @@ class Funnel:
 
         ended_at = datetime.now(timezone.utc).timestamp()
         metadata = self._collect_metadata(step)
-        metadata |= {"started_at": started_at, "ended_at": ended_at}
+        metadata = {"started_at": started_at, "ended_at": ended_at, **metadata}
         with open(step.storage_dir / self.metadata_filename, "w+") as f:
             f.write(json.dumps(metadata))
 
