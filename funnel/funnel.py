@@ -215,7 +215,7 @@ class Funnel:
 
     def _input(self, step, i):
         parent_step = self._parent_step[step]
-        p = parent_step.storage_dir / f"{i}"
+        p = parent_step.output_path(i)
         # a step's input is the same as its parent step's output.
         input_type = parent_step.output
         if input_type == "object":
