@@ -333,6 +333,10 @@ class Funnel:
                     i = int(argv[1])
                     val = self._input(step, i)
                     step.process_item(val, i)
+                    # our job is done: we've written output in process_item.
+                    # avoid running code that is only meant to be run by the
+                    # master step/process which submitted this batch job.
+                    return
             else:
                 # no discovery batch mode. execute normally (sequential execution).
                 for i in range(parent_step_count_items + 1):
