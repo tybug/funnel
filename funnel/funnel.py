@@ -314,11 +314,11 @@ class Funnel:
                     subprocess.Popen(["sbatch", f.name])
 
                     while True:
-                        time.sleep(30)
+                        time.sleep(15)
                         # piping to grep is annoying without shell=True. Should
                         # probably use proper subprocess.Pipe at some point for
                         # security though.
-                        process = subprocess.run(f"squeue -u {user} | grep {step.name}")
+                        process = subprocess.run(f"squeue -u {user} | grep {step.name}", shell=True)
                         # grep found something iff returncode is 0
                         if process.returncode != 0:
                             # grep didn't find anything, so the batch job finished.
