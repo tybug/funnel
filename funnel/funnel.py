@@ -318,7 +318,11 @@ class Funnel:
                         # piping to grep is annoying without shell=True. Should
                         # probably use proper subprocess.Pipe at some point for
                         # security though.
-                        process = subprocess.run(f"squeue -u {user} | grep {step.name}", shell=True)
+
+                        # by default the name is truncated to 8 chars. Override
+                        # the format with %j (name) to show the full name. Also
+                        # avoids false positives with grep
+                        process = subprocess.run(f"squeue -u {user} --format %j | grep {step.name}", shell=True)
                         # grep found something iff returncode is 0
                         if process.returncode != 0:
                             # grep didn't find anything, so the batch job finished.
