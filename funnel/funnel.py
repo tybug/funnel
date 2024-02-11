@@ -150,7 +150,7 @@ class Funnel:
 
     def run(self):
         for step in self.steps:
-            self.run_step(step)
+            self._run_step(step)
 
     def run_from_step(self, /, StepClass):
         """
@@ -160,11 +160,11 @@ class Funnel:
         step = self._find_step(StepClass)
         i = self.steps.index(step)
         for step in self.steps[i:]:
-            self.run_step(step)
+            self._run_step(step)
 
     def run_single_step(self, /, StepClass):
         step = self._find_step(StepClass)
-        self.run_step(step)
+        self._run_step(step)
 
     def _input(self, step, i):
         parent_step = self._parent_step[step]
@@ -178,7 +178,7 @@ class Funnel:
         if input_type == "path":
             return p
 
-    def run_step(self, step: Step) -> list[Any]:
+    def _run_step(self, step: Step) -> list[Any]:
         print(f"running step {step.name}")
         step.storage_dir.mkdir(exist_ok=True)
 
