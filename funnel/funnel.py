@@ -305,7 +305,7 @@ class Funnel:
                     """
                     array_job = textwrap.dedent(array_job).strip()
                     with NamedTemporaryFile(mode="w+", suffix=".sh", delete=False) as f:
-                        print(f"writing batch script to {f.name}")
+                        print(f"batch script for {step.name} at {f.name}")
                         f.write(array_job)
                     subprocess.Popen(["sbatch", f.name])
 
