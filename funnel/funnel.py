@@ -13,7 +13,7 @@ import time
 from typing import List
 import getpass
 
-from funnel.utils import highest_numbered_file
+from funnel.utils import item_ids_in_dir
 
 
 class Reject(Exception):
@@ -47,9 +47,6 @@ class Step:
         self.storage_dir = storage_dir / self.name
         self.metadata_dir = self.storage_dir / "_processing_results"
         self.parent_step = parent_step
-        # use this instead of i when writing filenames, because filtering out
-        # elements will break up the ordering (e.g. [0, 2, 4, 5])
-        self.valid_items = 0
 
     def __str__(self):
         return self.name
@@ -90,10 +87,7 @@ class Step:
             self._write_metadata(metadata, i)
             return
 
-        # use valid_items as it ensures sequentially ordering when filtering,
-        # whereas i does not (i is the previous step's i)
-        output_path = self.output_path(self.valid_items)
-
+        output_path = self.output_path(i)
         if output is COPY:
             assert self.parent_step is not None
             previous_output_path = self.parent_step.output_path(i)
@@ -114,9 +108,6 @@ class Step:
 
         metadata = {"status": "valid"}
         self._write_metadata(metadata, i)
-
-        # we'll only get here if Reject isn't raised.
-        self.valid_items += 1
 
 
 class InputStep(Step):
@@ -280,7 +271,7 @@ class Funnel:
             parent_step = self._parent_step[step]
             # invariant: the names of the output files/dirs are ordered
             # sequentially (no breaks in the ordering).
-            parent_step_count_items = highest_numbered_file(parent_step.storage_dir)
+            item_ids = item_ids_in_dir(parent_step.storage_dir)
             # TODO modify this block for discovery_batch.
             # will need submit a batch job to discovery, then spinlock
             # checking its status every 30 seconds or so.
@@ -296,13 +287,14 @@ class Funnel:
                     # TODO fiogure out a better place for output and error logs
                     # in the array job. should we have a meta dir per Funnel
                     # where this stuff can go?
+                    array_str = ",".join(str(n) for n in item_ids)
                     array_job = f"""
                         #!/bin/bash
                         #SBATCH --partition=short
                         #SBATCH --job-name {step.name}
                         #SBATCH --nodes 1
                         #SBATCH --ntasks 1
-                        #SBATCH --array=0-{parent_step_count_items}%50   # array description (% is num simultaneous jobs, max 50)
+                        #SBATCH --array={array_str}%50   # array description (% is num simultaneous jobs, max 50)
                         #SBATCH -o /scratch/{user}/output_%A_%a.txt
                         #SBATCH -e /scratch/{user}/error_%A_%a.txt
 
@@ -339,9 +331,9 @@ class Funnel:
                     return
             else:
                 # no discovery batch mode. execute normally (sequential execution).
-                for i in range(parent_step_count_items + 1):
-                    val = self._input(step, i)
-                    step.process_item(val, i)
+                for item_id in item_ids:
+                    val = self._input(step, item_id)
+                    step.process_item(val, item_id)
 
         ended_at = datetime.now(timezone.utc).timestamp()
         metadata = self._collect_metadata(step)
