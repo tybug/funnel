@@ -97,7 +97,7 @@ class Step:
         if output is COPY:
             assert self.parent_step is not None
             previous_output_path = self.parent_step.output_path(i)
-            output_path.symlink_to(previous_output_path)
+            output_path.symlink_to(previous_output_path.resolve())
         elif self.output == "object":
             if output is None:
                 raise Exception(
