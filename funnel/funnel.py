@@ -249,6 +249,7 @@ class Funnel:
 
     def _run_step(self, step: Step, *, argv=None, discovery_batch=False):
         is_single_item_in_batch = discovery_batch and len(argv) > 1
+        step.storage_dir.mkdir(exists_ok=True)
         if not is_single_item_in_batch:
             print(f"running step {step.name}")
             # recreate the directory for this step (unless we're a single item
