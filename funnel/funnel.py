@@ -11,6 +11,10 @@ class Reject(Exception):
     Raised when a step rejects (filters out) the current item.
     """
 
+# return this from Step#item to indicte that the item is unchanged from the
+# previous step. Used both for convenience and to reduce disk storage (we symlink
+# to the previous item instead of copying).
+COPY = object()
 
 @dataclass
 class Run:
@@ -23,14 +27,14 @@ class Step:
     # subclasses must set these at the class level
     name = None
     output = None
-    input = None
 
-    def __init__(self, storage_dir):
+    def __init__(self, storage_dir, *, parent_step):
         # Written to statistics.json at the end of a step. steps can put anything
         # they want here, e.g. stacktraces for items that were rejected as a
         # result of errors.
         self.metadata = {}
         self.storage_dir = storage_dir / self.name
+        self.parent_step = parent_step
         # use this instead of i when writing filenames, because filtering out
         # elements will break up the ordering (e.g. [0, 2, 4, 5])
         self.valid_items = 0
@@ -55,19 +59,27 @@ class Step:
 
     def process_item(self, item, i):
         output = self.item(item, i)
-        if self.output == "object":
+        # use valid_items as it ensures sequentially ordering when filtering,
+        # whereas i does not (i is the previous step's i)
+        output_path = self.output_path(self.valid_items)
+
+        if output is COPY:
+            assert self.parent_step is not None
+            previous_output_path = self.parent_step.output_path(i)
+            output_path.symlink_to(previous_output_path)
+        elif self.output == "object":
             if output is None:
                 raise Exception(
                     'Step must return a value from item() for output == "object"'
                 )
 
             output = json.dumps(output)
-            # use valid_items as it ensures sequentially ordering when filtering,
-            # whereas i does not (i is the previous step's i)
-            with open(self.output_path(self.valid_items), "w+") as f:
+
+            with open(output_path, "w+") as f:
                 f.write(output)
-        # for output == "path", the step is responsible for writing to
-        # output_path itself
+        # for output == "path" which doesn't return COPY, the step is responsible
+        # for writing to output_path itself. TODO we could check that something
+        # has in fact been written to output_path in this case
 
         # we'll only get here if Reject isn't raised (that's handled by Funnel).
         self.valid_items += 1
@@ -93,7 +105,10 @@ class FilterStep(Step):
     def item(self, item, i):
         if not self.filter(item):
             raise Reject()
-        return item
+        # filter steps don't modify the accepted items, so tell Funnel to copy
+        # the item from the previous step. This differs from `return item` as
+        # the item may be a path with a full directory structure (output = "path").
+        return COPY
 
     @abstractmethod
     def filter(self, item):
@@ -124,12 +139,13 @@ class Funnel:
         raise Exception(f"could not find step {StepClass.name} (options: {self.steps})")
 
     def add_step(self, StepClass):
-        step = StepClass(self.storage_dir)
+        parent_step = self._most_recently_added_step
+        step = StepClass(self.storage_dir, parent_step=parent_step)
         # first step has to be an InputStep, and nothing else can be an InputStep.
         assert isinstance(step, InputStep) == (len(self.steps) == 0)
 
         self.steps.append(step)
-        self._parent_step[step] = self._most_recently_added_step
+        self._parent_step[step] = parent_step
         self._most_recently_added_step = step
 
     def run(self):
