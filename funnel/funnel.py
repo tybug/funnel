@@ -157,11 +157,11 @@ class Funnel:
         # parent. We can add tree parent hierarchies later.
         self._most_recently_added_step = None
 
-    def _find_step(self, StepClass):
+    def _find_step(self, step_name):
         for step in self.steps:
-            if step.name == StepClass.name:
+            if step.name == step_name:
                 return step
-        raise Exception(f"could not find step {StepClass.name} (options: {self.steps})")
+        raise Exception(f"could not find step {step_name} (options: {self.steps})")
 
     def add_step(self, StepClass):
         assert StepClass.name is not None, f"must set a name for {StepClass}"
@@ -194,6 +194,14 @@ class Funnel:
             as we will attempt to run various discovery-specific commands which
             will error if run on any other system.
         """
+        # we're in the middle of a bathc. run a single item in a single step.
+        if argv and len(argv) > 2:
+            step_name = argv[1]
+            i = int(argv[2])
+            step = self._find_step(step_name)
+            self._run_item(step, i)
+            return
+
         for step in self.steps:
             self._run_step(step, argv=argv, discovery_batch=discovery_batch)
 
@@ -202,13 +210,13 @@ class Funnel:
         Runs the funnel from (and including) the given step, but not any steps
         before.
         """
-        step = self._find_step(StepClass)
+        step = self._find_step(StepClass.name)
         i = self.steps.index(step)
         for step in self.steps[i:]:
             self._run_step(step)
 
     def run_single_step(self, /, StepClass):
-        step = self._find_step(StepClass)
+        step = self._find_step(StepClass.name)
         self._run_step(step)
 
     def _input(self, step, i):
@@ -247,16 +255,16 @@ class Funnel:
 
         return metadata
 
+    def _run_item(self, step: Step, i):
+        val = self._input(step, i)
+        step.process_item(val, i)
+
     def _run_step(self, step: Step, *, argv=None, discovery_batch=False):
-        is_single_item_in_batch = discovery_batch and len(argv) > 1
-        step.storage_dir.mkdir(exist_ok=True)
-        if not is_single_item_in_batch:
-            print(f"running step {step.name}")
-            # recreate the directory for this step (unless we're a single item
-            # in a batch, in which case our parent process will do that for us.)
-            if step.storage_dir.exists():
-                shutil.rmtree(step.storage_dir)
-            step.storage_dir.mkdir()
+        print(f"running step {step.name}")
+        # recreate the directory for this step
+        if step.storage_dir.exists():
+            shutil.rmtree(step.storage_dir)
+        step.storage_dir.mkdir()
 
         started_at = datetime.now(timezone.utc).timestamp()
 
@@ -281,49 +289,36 @@ class Funnel:
             # checking its status every 30 seconds or so.
 
             if discovery_batch:
-                if len(argv) == 1:
-                    # nothing was passed, so this is the master process responsible
-                    # for launching the array job.
-                    f = argv[0]
-                    user = getpass.getuser()
-                    # https://rc-docs.northeastern.edu/en/latest/index.html
-                    # %A = array job ID, %a = array index
-                    # TODO fiogure out a better place for output and error logs
-                    # in the array job. should we have a meta dir per Funnel
-                    # where this stuff can go?
-                    array_str = ",".join(str(n) for n in item_ids)
-                    array_job = f"""
-                        #!/bin/bash
-                        #SBATCH --partition=short
-                        #SBATCH --job-name {step.name}
-                        #SBATCH --nodes 1
-                        #SBATCH --ntasks 1
-                        #SBATCH --array={array_str}  # array description (% is num simultaneous jobs, max 50)
-                        #SBATCH -o /scratch/{user}/output_%A_%a.txt
-                        #SBATCH -e /scratch/{user}/error_%A_%a.txt
+                # launch the array job for processing this step.
+                f = argv[0]
+                user = getpass.getuser()
+                # https://rc-docs.northeastern.edu/en/latest/index.html
+                # %A = array job ID, %a = array index
+                # TODO fiogure out a better place for output and error logs
+                # in the array job. should we have a meta dir per Funnel
+                # where this stuff can go?
+                array_str = ",".join(str(n) for n in item_ids)
+                array_job = f"""
+                    #!/bin/bash
+                    #SBATCH --partition=short
+                    #SBATCH --job-name {step.name}
+                    #SBATCH --nodes 1
+                    #SBATCH --ntasks 1
+                    #SBATCH --array={array_str}  # array description (% is num simultaneous jobs, max 50)
+                    #SBATCH -o /scratch/{user}/output_%A_%a.txt
+                    #SBATCH -e /scratch/{user}/error_%A_%a.txt
 
-                        python {f} $SLURM_ARRAY_TASK_ID
-                    """
-                    array_job = textwrap.dedent(array_job).strip()
-                    with NamedTemporaryFile(mode="w+", suffix=".sh", delete=False) as f:
-                        print(f"batch script for {step.name} at {f.name}")
-                        f.write(array_job)
-                    process = subprocess.Popen(["sbatch", "--wait", f.name])
-                    process.wait()
-                    # even though we told it to wait until all tasks finished with
-                    # --wait, let's give it a bit longer to clean up, just in case.
-                    time.sleep(1)
-                else:
-                    # we're already inside a batch job and need to process a specific
-                    # item on this step.
-                    assert is_single_item_in_batch
-                    i = int(argv[1])
-                    val = self._input(step, i)
-                    step.process_item(val, i)
-                    # our job is done: we've written output in process_item.
-                    # avoid running code that is only meant to be run by the
-                    # master step/process which submitted this batch job.
-                    return
+                    python {f} "{step.name}" "$SLURM_ARRAY_TASK_ID"
+                """
+                array_job = textwrap.dedent(array_job).strip()
+                with NamedTemporaryFile(mode="w+", suffix=".sh", delete=False) as f:
+                    print(f"batch script for {step.name} at {f.name}")
+                    f.write(array_job)
+                process = subprocess.Popen(["sbatch", "--wait", f.name])
+                process.wait()
+                # even though we told it to wait until all tasks finished with
+                # --wait, let's give it a bit longer to clean up, just in case.
+                time.sleep(1)
             else:
                 # no discovery batch mode. execute normally (sequential execution).
                 for item_id in item_ids:
@@ -340,5 +335,4 @@ class Funnel:
         # this avoids confusing when looking at the data; the intermediate step
         # is only necessary to accomodate the distributed nature of discovery.
         # this line can be commented out if needed for debugging.
-        print("deleting metadata dir", step.metadata_dir)
         shutil.rmtree(step.metadata_dir)
