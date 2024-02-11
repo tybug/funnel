@@ -340,4 +340,5 @@ class Funnel:
         # this avoids confusing when looking at the data; the intermediate step
         # is only necessary to accomodate the distributed nature of discovery.
         # this line can be commented out if needed for debugging.
+        print("deleting metadata dir", step.metadata_dir)
         shutil.rmtree(step.metadata_dir)
