@@ -248,11 +248,14 @@ class Funnel:
         return metadata
 
     def _run_step(self, step: Step, *, argv=None, discovery_batch=False):
-        print(f"running step {step.name}")
-        # recreate the directory for this step
-        if step.storage_dir.exists():
-            shutil.rmtree(step.storage_dir)
-        step.storage_dir.mkdir()
+        is_single_item_in_batch = discovery_batch and len(argv) > 1
+        if not is_single_item_in_batch:
+            print(f"running step {step.name}")
+            # recreate the directory for this step (unless we're a single item
+            # in a batch, in which case our parent process will do that for us.)
+            if step.storage_dir.exists():
+                shutil.rmtree(step.storage_dir)
+            step.storage_dir.mkdir()
 
         started_at = datetime.now(timezone.utc).timestamp()
 
@@ -323,6 +326,7 @@ class Funnel:
                 else:
                     # we're already inside a batch job and need to process a specific
                     # item on this step.
+                    assert is_single_item_in_batch
                     i = int(argv[1])
                     val = self._input(step, i)
                     step.process_item(val, i)
