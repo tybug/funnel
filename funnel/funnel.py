@@ -172,6 +172,9 @@ class Funnel:
         raise Exception(f"could not find step {StepClass.name} (options: {self.steps})")
 
     def add_step(self, StepClass):
+        assert StepClass.name is not None, f"must set a name for {StepClass}"
+        assert StepClass.output is not None, f"must set an output for {StepClass}"
+
         parent_step = self._most_recently_added_step
         step = StepClass(self.storage_dir, parent_step=parent_step)
         # first step has to be an InputStep, and nothing else can be an InputStep.
