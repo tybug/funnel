@@ -1,6 +1,7 @@
 from pathlib import Path
 import re
 
+
 def highest_numbered_file(path: Path):
     n = 0
     for p in path.glob("*"):

@@ -6,6 +6,11 @@ from datetime import datetime, timezone
 import json
 import shutil
 import re
+import textwrap
+from tempfile import NamedTemporaryFile
+import subprocess
+import time
+import getpass
 
 from funnel.utils import highest_numbered_file
 
@@ -15,10 +20,12 @@ class Reject(Exception):
     Raised when a step rejects (filters out) the current item.
     """
 
+
 # return this from Step#item to indicte that the item is unchanged from the
 # previous step. Used both for convenience and to reduce disk storage (we symlink
 # to the previous item instead of copying).
 COPY = object()
+
 
 @dataclass
 class Run:
@@ -78,9 +85,7 @@ class Step:
         try:
             output = self.item(item, i)
         except Reject:
-            metadata = {
-                "status": "rejected"
-            }
+            metadata = {"status": "rejected"}
             self._write_metadata(metadata, i)
             return
 
@@ -106,9 +111,7 @@ class Step:
         # for writing to output_path itself. TODO we could check that something
         # has in fact been written to output_path in this case
 
-        metadata = {
-            "status": "valid"
-        }
+        metadata = {"status": "valid"}
         self._write_metadata(metadata, i)
 
         # we'll only get here if Reject isn't raised.
@@ -178,7 +181,7 @@ class Funnel:
         self._parent_step[step] = parent_step
         self._most_recently_added_step = step
 
-    def run(self, *, discovery_batch=False):
+    def run(self, *, argv=None, discovery_batch=False):
         """
         Parameters
         ----------
@@ -197,7 +200,7 @@ class Funnel:
             will error if run on any other system.
         """
         for step in self.steps:
-            self._run_step(step, discovery_batch=discovery_batch)
+            self._run_step(step, argv=argv, discovery_batch=discovery_batch)
 
     def run_from_step(self, /, StepClass):
         """
@@ -249,8 +252,7 @@ class Funnel:
 
         return metadata
 
-
-    def _run_step(self, step: Step, *, discovery_batch) -> list[Any]:
+    def _run_step(self, step: Step, *, argv=None, discovery_batch=False):
         print(f"running step {step.name}")
         # recreate the directory for this step
         if step.storage_dir.exists():
@@ -279,16 +281,59 @@ class Funnel:
             # will need submit a batch job to discovery, then spinlock
             # checking its status every 30 seconds or so.
 
-            for i in range(parent_step_count_items + 1):
-                val = self._input(step, i)
-                step.process_item(val, i)
+            if discovery_batch:
+                if len(argv) == 1:
+                    # nothing was passed, so this is the master process responsible
+                    # for launching the array job.
+                    f = argv[0]
+                    user = getpass.getuser()
+                    # https://rc-docs.northeastern.edu/en/latest/index.html
+                    # %A = array job ID, %a = array index
+                    # TODO fiogure out a better place for output and error logs
+                    # in the array job. should we have a meta dir per Funnel
+                    # where this stuff can go?
+                    array_job = f"""
+                        #!/bin/bash
+                        #SBATCH --partition=short
+                        #SBATCH --job-name {step.name}
+                        #SBATCH --nodes 1
+                        #SBATCH --ntasks 1
+                        #SBATCH --array=0-{parent_step_count_items}%50   # array description (% is num simultaneous jobs, max 50)
+                        #SBATCH -o /scratch/{user}/output_%A_%a.txt
+                        #SBATCH -e /scratch/{user}/error_%A_%a.txt
+
+                        python {f} $SLURM_ARRAY_TASK_ID
+                    """
+                    array_job = textwrap.dedent(array_job).strip()
+                    with NamedTemporaryFile(mode="w+", suffix=".sh", delete=False) as f:
+                        f.write(array_job)
+                    subprocess.Popen(["sbatch", f.name])
+
+                    while True:
+                        time.sleep(30)
+                        # piping to grep is annoying without shell=True. Should
+                        # probably use proper subprocess.Pipe at some point for
+                        # security though.
+                        process = subprocess.run(f"squeue -u {user} | grep {step.name}")
+                        # grep found something iff returncode is 0
+                        if process.returncode != 0:
+                            # grep didn't find anything, so the batch job finished.
+                            break
+                else:
+                    # we're already inside a batch job and need to process a specific
+                    # item on this step.
+                    i = int(argv[1])
+                    val = self._input(step, i)
+                    step.process_item(val, i)
+            else:
+                # no discovery batch mode. execute normally (sequential execution).
+                for i in range(parent_step_count_items + 1):
+                    val = self._input(step, i)
+                    step.process_item(val, i)
 
         ended_at = datetime.now(timezone.utc).timestamp()
         metadata = self._collect_metadata(step)
-        metadata |= {
-            "started_at": started_at,
-            "ended_at": ended_at
-        }
+        metadata |= {"started_at": started_at, "ended_at": ended_at}
         with open(step.storage_dir / self.metadata_filename, "w+") as f:
             f.write(json.dumps(metadata))
 
