@@ -4,6 +4,10 @@ from dataclasses import dataclass
 from typing import Any
 from datetime import datetime, timezone
 import json
+import shutil
+import re
+
+from funnel.utils import highest_numbered_file
 
 
 class Reject(Exception):
@@ -29,11 +33,11 @@ class Step:
     output = None
 
     def __init__(self, storage_dir, *, parent_step):
-        # Written to statistics.json at the end of a step. steps can put anything
-        # they want here, e.g. stacktraces for items that were rejected as a
-        # result of errors.
+        # step-specific metadata. steps can put anything they want here, e.g.
+        # stacktraces for items that were rejected as a result of errors.
         self.metadata = {}
         self.storage_dir = storage_dir / self.name
+        self.metadata_dir = self.storage_dir / "_processing_results"
         self.parent_step = parent_step
         # use this instead of i when writing filenames, because filtering out
         # elements will break up the ordering (e.g. [0, 2, 4, 5])
@@ -57,8 +61,29 @@ class Step:
     def output_path(self, i):
         return self.storage_dir / f"{i}"
 
+    def add_metadata(self, metadata):
+        self.metadata |= metadata
+
+    def _write_metadata(self, metadata, i):
+        metadata = metadata | {"metadata": self.metadata}
+        self.metadata_dir.mkdir(exist_ok=True)
+        with open(self.metadata_dir / f"{i}", "w+") as f:
+            v = json.dumps(metadata)
+            f.write(v)
+
     def process_item(self, item, i):
-        output = self.item(item, i)
+        # clear metadata each item, so any add_metadata is fresh
+        self.metadata.clear()
+
+        try:
+            output = self.item(item, i)
+        except Reject:
+            metadata = {
+                "status": "rejected"
+            }
+            self._write_metadata(metadata, i)
+            return
+
         # use valid_items as it ensures sequentially ordering when filtering,
         # whereas i does not (i is the previous step's i)
         output_path = self.output_path(self.valid_items)
@@ -81,7 +106,12 @@ class Step:
         # for writing to output_path itself. TODO we could check that something
         # has in fact been written to output_path in this case
 
-        # we'll only get here if Reject isn't raised (that's handled by Funnel).
+        metadata = {
+            "status": "valid"
+        }
+        self._write_metadata(metadata, i)
+
+        # we'll only get here if Reject isn't raised.
         self.valid_items += 1
 
 
@@ -148,9 +178,26 @@ class Funnel:
         self._parent_step[step] = parent_step
         self._most_recently_added_step = step
 
-    def run(self):
+    def run(self, *, discovery_batch=False):
+        """
+        Parameters
+        ----------
+        discovery_batch: bool
+            Whether to run this Funnel in batch mode on Northeastern's discovery.
+            If True, a batch job will be submitted for each step, with a number
+            of single jobs equal to the number of items for that step. Once all
+            items in the step finish processing (i.e. the batch job finishes),
+            the next step will be run in the same fashion.
+
+            The only step that runs sequentially is the InputStep, because we
+            don't know ahead of time how many items there are.
+
+            If discovery_batch is True, you *must* be running this on discovery,
+            as we will attempt to run various discovery-specific commands which
+            will error if run on any other system.
+        """
         for step in self.steps:
-            self._run_step(step)
+            self._run_step(step, discovery_batch=discovery_batch)
 
     def run_from_step(self, /, StepClass):
         """
@@ -178,12 +225,38 @@ class Funnel:
         if input_type == "path":
             return p
 
-    def _run_step(self, step: Step) -> list[Any]:
-        print(f"running step {step.name}")
-        step.storage_dir.mkdir(exist_ok=True)
+    def _collect_metadata(self, step: Step):
+        metadata = {
+            "count_items": 0,
+            "count_rejected": 0,
+            "rejected": [],
+            "item_metadata": {},
+        }
+        for p in step.metadata_dir.glob("*"):
+            # ignore .DS_Store and other garbage
+            if not re.match(r"\d+", p.name):
+                continue
+            i = int(p.name)
+            with open(p) as f:
+                item_metadata = json.loads(f.read())
 
-        items = []
-        rejected = []
+            metadata["count_items"] += 1
+            if item_metadata["status"] == "rejected":
+                metadata["count_rejected"] += 1
+                metadata["rejected"].append(i)
+            if item_metadata["metadata"]:
+                metadata["item_metadata"][i] = item_metadata["metadata"]
+
+        return metadata
+
+
+    def _run_step(self, step: Step, *, discovery_batch) -> list[Any]:
+        print(f"running step {step.name}")
+        # recreate the directory for this step
+        if step.storage_dir.exists():
+            shutil.rmtree(step.storage_dir)
+        step.storage_dir.mkdir()
+
         started_at = datetime.now(timezone.utc).timestamp()
 
         # InputStep has to be handled a bit specially. This is ugly and should
@@ -199,30 +272,28 @@ class Funnel:
                 step.process_item(item, i)
         else:
             parent_step = self._parent_step[step]
-            i = 0
             # invariant: the names of the output files/dirs are ordered
             # sequentially (no breaks in the ordering).
-            while (p := Path(parent_step.output_path(i))).exists():
+            parent_step_count_items = highest_numbered_file(parent_step.storage_dir)
+            # TODO modify this block for discovery_batch.
+            # will need submit a batch job to discovery, then spinlock
+            # checking its status every 30 seconds or so.
+
+            for i in range(parent_step_count_items + 1):
                 val = self._input(step, i)
-                try:
-                    step.process_item(val, i)
-                except Reject:
-                    rejected.append(i)
-                    i += 1
-                    continue
-                items.append(i)
-                i += 1
+                step.process_item(val, i)
 
         ended_at = datetime.now(timezone.utc).timestamp()
-        metadata = {
+        metadata = self._collect_metadata(step)
+        metadata |= {
             "started_at": started_at,
-            "ended_at": ended_at,
-            "count_items": len(items),
-            "count_rejected": len(rejected),
-            "rejected": rejected,
-            "metadata": step.metadata,
+            "ended_at": ended_at
         }
         with open(step.storage_dir / self.metadata_filename, "w+") as f:
             f.write(json.dumps(metadata))
 
-        return items
+        # now that we're done collecting metadata, we can remove that directory.
+        # this avoids confusing when looking at the data; the intermediate step
+        # is only necessary to accomodate the distributed nature of discovery.
+        # this line can be commented out if needed for debugging.
+        shutil.rmtree(step.metadata_dir)
