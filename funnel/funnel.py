@@ -133,6 +133,8 @@ class InputStep(Step):
 
 
 class FilterStep(Step):
+    # the output of a filter step is the same as the output of its parent step.
+    output = "copy"
 
     def item(self, item, i):
         if not self.filter(item):
@@ -244,11 +246,20 @@ class Funnel:
         step = self._find_step(StepClass.name)
         self._run_step(step)
 
+    def _input_type(self, step):
+        parent_step = self._parent_step[step]
+        # a step's input is equal to its parent step's output. If that parent
+        # has an output of COPY, that means its output is the same as *its*
+        # parent step (the current step's grandparent).
+        input_type = parent_step.output
+        if input_type == "copy":
+            return self._input_type(parent_step)
+        return input_type
+
     def _input(self, step, i):
         parent_step = self._parent_step[step]
         p = parent_step.output_path(i)
-        # a step's input is the same as its parent step's output.
-        input_type = parent_step.output
+        input_type = self._input_type(step)
         if input_type == "json":
             with open(p) as f:
                 val = f.read()
