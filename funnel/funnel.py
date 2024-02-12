@@ -133,9 +133,6 @@ class InputStep(Step):
 
 
 class FilterStep(Step):
-    # this isn't really correct, because we either return COPY or raise reject.
-    # but it's the closest for now.
-    output = "json"
 
     def item(self, item, i):
         if not self.filter(item):
@@ -172,8 +169,10 @@ class Funnel:
 
         # should not be set by users. set internally by code.
         self.argparser.add_argument("--in-batch", dest="in_batch", action="store_true")
-        self.argparser.add_argument("--batch-step", dest="batch_step") # step name
-        self.argparser.add_argument("--batch-item", dest="batch_item", type=int) # item id in that step
+        self.argparser.add_argument("--batch-step", dest="batch_step")  # step name
+        self.argparser.add_argument(
+            "--batch-item", dest="batch_item", type=int
+        )  # item id in that step
 
     def _find_step(self, step_name):
         for step in self.steps:
