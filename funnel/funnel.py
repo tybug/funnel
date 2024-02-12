@@ -233,7 +233,7 @@ class Funnel:
 
     def _collect_metadata(self, step: Step):
         metadata = {
-            "count_items": 0,
+            "count_valid": 0,
             "count_rejected": 0,
             "rejected": [],
             "item_metadata": {},
@@ -246,10 +246,11 @@ class Funnel:
             with open(p) as f:
                 item_metadata = json.loads(f.read())
 
-            metadata["count_items"] += 1
             if item_metadata["status"] == "rejected":
                 metadata["count_rejected"] += 1
                 metadata["rejected"].append(i)
+            else:
+                metadata["count_valid"] += 1
             if item_metadata["metadata"]:
                 metadata["item_metadata"][i] = item_metadata["metadata"]
 
