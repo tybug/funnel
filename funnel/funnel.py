@@ -12,6 +12,7 @@ import subprocess
 import time
 from typing import List
 import getpass
+from argparse import ArgumentParser
 
 from funnel.utils import item_ids_in_dir
 
@@ -162,6 +163,9 @@ class Funnel:
         # parent. We can add tree parent hierarchies later.
         self._most_recently_added_step = None
 
+        self.argparser = ArgumentParser()
+        self.argparser.add_argument("--from-step", dest="from_step")
+
     def _find_step(self, step_name):
         for step in self.steps:
             if step.name == step_name:
@@ -181,7 +185,7 @@ class Funnel:
         self._parent_step[step] = parent_step
         self._most_recently_added_step = step
 
-    def run(self, *, argv=None, discovery_batch=False):
+    def run(self, argv, *, discovery_batch=False):
         """
         Parameters
         ----------
@@ -199,16 +203,25 @@ class Funnel:
             as we will attempt to run various discovery-specific commands which
             will error if run on any other system.
         """
-        # we're in the middle of a bathc. run a single item in a single step.
-        if argv and len(argv) > 2:
+        # we're in the middle of a batch. run a single item in a single step.
+        if len(argv) > 2:
             step_name = argv[1]
             i = int(argv[2])
             step = self._find_step(step_name)
             self._run_item(step, i)
             return
 
+        args = self.argparser.parse_args(argv[1:])
+        if args.from_step is not None:
+            # all steps after (and including) this step.
+            step = self._find_step(args.from_step)
+            i = self.steps.index(step)
+            for step in self.steps[i:]:
+                self._run_step(step, argv, discovery_batch=discovery_batch)
+            return
+
         for step in self.steps:
-            self._run_step(step, argv=argv, discovery_batch=discovery_batch)
+            self._run_step(step, argv, discovery_batch=discovery_batch)
 
     def run_from_step(self, /, StepClass):
         """
@@ -265,7 +278,7 @@ class Funnel:
         val = self._input(step, i)
         step.process_item(val, i)
 
-    def _run_step(self, step: Step, *, argv=None, discovery_batch=False):
+    def _run_step(self, step: Step, argv: List[str], *, discovery_batch=False):
         print(f"running step {step.name}")
         # recreate the directory for this step
         if step.storage_dir.exists():
