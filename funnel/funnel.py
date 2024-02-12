@@ -92,10 +92,10 @@ class Step:
             assert self.parent_step is not None
             previous_output_path = self.parent_step.output_path(i)
             output_path.symlink_to(previous_output_path.resolve())
-        elif self.output == "object":
+        elif self.output == "json":
             if output is None:
                 raise Exception(
-                    'Step must return a value from item() for output == "object"'
+                    'Step must return a value from item() for output == "json"'
                 )
 
             output = json.dumps(output)
@@ -224,7 +224,7 @@ class Funnel:
         p = parent_step.output_path(i)
         # a step's input is the same as its parent step's output.
         input_type = parent_step.output
-        if input_type == "object":
+        if input_type == "json":
             with open(p) as f:
                 val = f.read()
                 return json.loads(val)
@@ -277,7 +277,7 @@ class Funnel:
             # load all the items...
             items = step.items()
             # ...then (ab)use process_item to handle writing each item to its file
-            # (if the InputStep has output == "object").
+            # (if the InputStep has output == "json").
             for i, item in enumerate(items):
                 step.process_item(item, i)
         else:
