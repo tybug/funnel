@@ -120,6 +120,11 @@ class InputStep(Step):
     def items(self):
         pass
 
+    # weird song and dance to get the correct caching behavior for items()
+    def get_items(self):
+        self._items = self.items()
+        return self._items
+
     def item(self, item, i):
         if self._items is None:
             self._items = self.items()
@@ -275,7 +280,7 @@ class Funnel:
         # because there is no "previous item" to operate on.
         if isinstance(step, InputStep):
             # load all the items...
-            items = step.items()
+            items = step.get_items()
             # ...then (ab)use process_item to handle writing each item to its file
             # (if the InputStep has output == "json").
             for i, item in enumerate(items):
