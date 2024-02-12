@@ -166,6 +166,11 @@ class Funnel:
         self.argparser = ArgumentParser()
         self.argparser.add_argument("--from-step", dest="from_step")
 
+        # should not be set by users. set internally by code.
+        self.argparser.add_argument("--in-batch", dest="in_batch", action="store_true")
+        self.argparser.add_argument("--batch-step", dest="batch_step") # step name
+        self.argparser.add_argument("--batch-item", dest="batch_item", type=int) # item id in that step
+
     def _find_step(self, step_name):
         for step in self.steps:
             if step.name == step_name:
@@ -203,15 +208,14 @@ class Funnel:
             as we will attempt to run various discovery-specific commands which
             will error if run on any other system.
         """
+        args = self.argparser.parse_args(argv[1:])
+
         # we're in the middle of a batch. run a single item in a single step.
-        if len(argv) > 2:
-            step_name = argv[1]
-            i = int(argv[2])
-            step = self._find_step(step_name)
-            self._run_item(step, i)
+        if args.in_batch:
+            step = self._find_step(args.batch_step)
+            self._run_item(step, step.batch_item)
             return
 
-        args = self.argparser.parse_args(argv[1:])
         if args.from_step is not None:
             # all steps after (and including) this step.
             step = self._find_step(args.from_step)
@@ -303,10 +307,11 @@ class Funnel:
             # invariant: the names of the output files/dirs are ordered
             # sequentially (no breaks in the ordering).
             item_ids = item_ids_in_dir(parent_step.storage_dir)
-            # TODO modify this block for discovery_batch.
-            # will need submit a batch job to discovery, then spinlock
-            # checking its status every 30 seconds or so.
-
+            # TODO meta-batch ourselves in 1k batches if item_ids is too large.
+            # slurm has a hard limit of 1001 on --array. In fact, I think not
+            # only is that the limit on the number of elements, but we can't
+            # even specify a number over that value. So we'll have to do some
+            # trickery to get the numbers to pass correctly.
             if discovery_batch:
                 # launch the array job for processing this step.
                 f = argv[0]
@@ -327,7 +332,7 @@ class Funnel:
                     #SBATCH -o /scratch/{user}/output_%A_%a.txt
                     #SBATCH -e /scratch/{user}/error_%A_%a.txt
 
-                    python {f} "{step.name}" "$SLURM_ARRAY_TASK_ID"
+                    python {f} --in-batch --batch-step "{step.name}" --batch-item "$SLURM_ARRAY_TASK_ID"
                 """
                 array_job = textwrap.dedent(array_job).strip()
                 with NamedTemporaryFile(mode="w+", suffix=".sh", delete=False) as f:
