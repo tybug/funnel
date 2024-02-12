@@ -15,6 +15,7 @@ import getpass
 from argparse import ArgumentParser
 
 from funnel.utils import item_ids_in_dir
+from funnel.utils import dumps
 
 
 class Reject(Exception):
@@ -74,7 +75,7 @@ class Step:
         metadata = {"metadata": self.metadata, **metadata}
         self.metadata_dir.mkdir(exist_ok=True)
         with open(self.metadata_dir / f"{i}", "w+") as f:
-            v = json.dumps(metadata)
+            v = dumps(metadata)
             f.write(v)
 
     def process_item(self, item, i):
@@ -99,7 +100,7 @@ class Step:
                     'Step must return a value from item() for output == "json"'
                 )
 
-            output = json.dumps(output)
+            output = dumps(output)
 
             with open(output_path, "w+") as f:
                 f.write(output)
@@ -367,7 +368,7 @@ class Funnel:
         metadata = self._collect_metadata(step)
         metadata = {"started_at": started_at, "ended_at": ended_at, **metadata}
         with open(step.storage_dir / self.metadata_filename, "w+") as f:
-            f.write(json.dumps(metadata))
+            f.write(dumps(metadata))
 
         # now that we're done collecting metadata, we can remove that directory.
         # this avoids confusing when looking at the data; the intermediate step
