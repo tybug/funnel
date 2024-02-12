@@ -133,6 +133,10 @@ class InputStep(Step):
 
 
 class FilterStep(Step):
+    # this isn't really correct, because we either return COPY or raise reject.
+    # but it's the closest for now.
+    output = "json"
+
     def item(self, item, i):
         if not self.filter(item):
             raise Reject()
