@@ -13,6 +13,7 @@ import time
 from typing import List
 import getpass
 from argparse import ArgumentParser
+import traceback
 
 from funnel.utils import item_ids_in_dir
 from funnel.utils import dumps
@@ -79,13 +80,20 @@ class Step:
             f.write(v)
 
     def process_item(self, item, i):
-        # clear metadata each item, so any add_metadata is fresh
+        # clear on metadata each item, so any add_metadata is fresh
         self.metadata.clear()
 
         try:
             output = self.item(item, i)
         except Reject:
             metadata = {"status": "rejected"}
+            self._write_metadata(metadata, i)
+            return
+        except Exception as e:
+            metadata = {
+                "status": "error",
+                "error_message": traceback.format_exception(e)
+            }
             self._write_metadata(metadata, i)
             return
 
@@ -272,7 +280,9 @@ class Funnel:
         metadata = {
             "count_valid": 0,
             "count_rejected": 0,
+            "count_error": 0,
             "rejected": [],
+            "errors": {},
             "item_metadata": {},
         }
         for p in step.metadata_dir.glob("*"):
@@ -286,6 +296,9 @@ class Funnel:
             if item_metadata["status"] == "rejected":
                 metadata["count_rejected"] += 1
                 metadata["rejected"].append(i)
+            elif item_metadata["status"] == "error":
+                metadata["count_error"] += 1
+                metadata["errors"][i] = item_metadata["error_message"]
             else:
                 metadata["count_valid"] += 1
             if item_metadata["metadata"]:
