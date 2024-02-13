@@ -227,7 +227,7 @@ class Funnel:
         # we're in the middle of a batch. run a single item in a single step.
         if args.in_batch:
             step = self._find_step(args.batch_step)
-            self._run_item(step, step.batch_item)
+            self._run_item(step, args.batch_item)
             return
 
         if args.from_step is not None:
