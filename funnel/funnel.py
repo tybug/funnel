@@ -92,7 +92,7 @@ class Step:
         except Exception as e:
             metadata = {
                 "status": "error",
-                "error_message": traceback.format_exception(e)
+                "error_message": traceback.format_exception(e),
             }
             self._write_metadata(metadata, i)
             return
