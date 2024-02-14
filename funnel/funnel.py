@@ -35,11 +35,20 @@ COPY = object()
 # files right now. 1001 is the default and also the value used on discovery.
 SLURM_MAX_ITEMS = 1000
 
+
 @dataclass
 class Run:
     started_at: datetime
     ended_at: datetime
     items: List[Any]
+
+
+def create_temporary_script(script_text, *, suffix) -> NamedTemporaryFile:
+    script_text = textwrap.dedent(script_text).strip()
+    with NamedTemporaryFile(mode="w+", suffix=suffix, delete=False) as f:
+        print(f"creating script at {f.name}")
+        f.write(script_text)
+    return f
 
 
 class Step:
@@ -346,7 +355,7 @@ class Funnel:
 
                 # https://rc-docs.northeastern.edu/en/latest/index.html
                 # %A = array job ID, %a = array index
-                # TODO fiogure out a better place for output and error logs
+                # TODO figure out a better place for output and error logs
                 # in the array job. should we have a meta dir per Funnel
                 # where this stuff can go?
 
@@ -355,36 +364,37 @@ class Funnel:
                 while remaining:
                     batch = remaining[:SLURM_MAX_ITEMS]
                     remaining = remaining[SLURM_MAX_ITEMS:]
+                    array_str = f"0-{len(batch)}"
 
-                    # not only is there a limit on the number of items in --array,
-                    # there is a limit on how high the values to --array can be
-                    # (in fact, the latter implies the former, with uniqueness).
-                    # so we have to get a bit fancy with how we pass things.
-                    # we'll compute an offset, pass the lowered numbers to --array,
-                    # and re-add the offset after.
+                    python_script_file = create_temporary_script(
+                        f"""
+                        import os
 
-                    # rely on sorting so [0] is the smallest item.
-                    offset = batch[0]
-                    batch = [n - offset for n in batch]
-                    assert all(n >= 0 for n in batch)
-                    array_str = ",".join(str(n) for n in batch)
-                    array_job = f"""
+                        item_ids = [{", ".join([str(id) for id in batch])}]
+                        task_id = os.environ["SLURM_ARRAY_TASK_ID"]
+                        item_id = item_ids[task_id]
+                        os.system(f'python {caller_file} --in-batch --batch-step "{step.name}" --batch-item {{item_id}}')
+                        """,
+                        suffix=".py",
+                    )
+                    array_job_file = create_temporary_script(
+                        f"""
                         #!/bin/bash
                         #SBATCH --partition=short
                         #SBATCH --job-name {step.name}
                         #SBATCH --nodes 1
                         #SBATCH --ntasks 1
-                        #SBATCH --array={array_str}  # array description (% is num simultaneous jobs, max 50)
+                        #SBATCH --array={array_str}
                         #SBATCH -o /scratch/{user}/output_%A_%a.txt
                         #SBATCH -e /scratch/{user}/error_%A_%a.txt
 
-                        python {caller_file} --in-batch --batch-step "{step.name}" --batch-item $(($SLURM_ARRAY_TASK_ID + {offset}))
-                    """
-                    array_job = textwrap.dedent(array_job).strip()
-                    with NamedTemporaryFile(mode="w+", suffix=".sh", delete=False) as f:
-                        print(f"batch script for {step.name} at {f.name}")
-                        f.write(array_job)
-                    process = subprocess.Popen(["sbatch", "--wait", f.name])
+                        python {python_script_file.name}
+                        """,
+                        suffix=".sh",
+                    )
+                    process = subprocess.Popen(
+                        ["sbatch", "--wait", array_job_file.name]
+                    )
                     # we'd like to launch all processes and then .wait() for
                     # them all after, giving long-running tasks in each batch
                     # a chance to run in parallel. But slurm really doesn't like
