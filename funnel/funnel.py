@@ -341,7 +341,7 @@ class Funnel:
             item_ids = item_ids_in_dir(parent_step.storage_dir)
             if discovery_batch:
                 # launch the array job for processing this step.
-                f = argv[0]
+                caller_file = argv[0]
                 user = getpass.getuser()
 
                 # https://rc-docs.northeastern.edu/en/latest/index.html
@@ -379,7 +379,7 @@ class Funnel:
                         #SBATCH -o /scratch/{user}/output_%A_%a.txt
                         #SBATCH -e /scratch/{user}/error_%A_%a.txt
 
-                        python {f} --in-batch --batch-step "{step.name}" --batch-item $(($SLURM_ARRAY_TASK_ID + {offset})) ""
+                        python {caller_file} --in-batch --batch-step "{step.name}" --batch-item $(($SLURM_ARRAY_TASK_ID + {offset})) ""
                     """
                     array_job = textwrap.dedent(array_job).strip()
                     with NamedTemporaryFile(mode="w+", suffix=".sh", delete=False) as f:
