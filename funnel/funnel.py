@@ -350,7 +350,6 @@ class Funnel:
                 # in the array job. should we have a meta dir per Funnel
                 # where this stuff can go?
 
-                processes = []
                 # slurm has a hard limit on --array, so meta-batch ourselves here.
                 remaining = sorted(item_ids)
                 while remaining:
@@ -386,14 +385,13 @@ class Funnel:
                         print(f"batch script for {step.name} at {f.name}")
                         f.write(array_job)
                     process = subprocess.Popen(["sbatch", "--wait", f.name])
-                    processes.append(process)
-
-                # this happens sequentially at the python level, but it doesn't
-                # matter, because the jobs are already submitted and running in
-                # parallel on discovery.
-                # if all the jobs are checked for termination, even sequentially,
-                # then we know they have all finished running here.
-                for process in processes:
+                    # we'd like to launch all processes and then .wait() for
+                    # them all after, giving long-running tasks in each batch
+                    # a chance to run in parallel. But slurm really doesn't like
+                    # this, even if we limit with %10:
+                    # [devoe.l@login-00] /etc/slurm λ sbatch /tmp/tmpw8sdl3qc.sh
+                    # sbatch: error: QOSMaxSubmitJobPerUserLimit
+                    # sbatch: error: Batch job submission failed: Job violates accounting/QOS policy (job submit limit, user's size and/or time limits)
                     process.wait()
 
                 # even though we told it to wait until all tasks finished with
