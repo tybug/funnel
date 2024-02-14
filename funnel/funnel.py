@@ -378,7 +378,7 @@ class Funnel:
                         #SBATCH -o /scratch/{user}/output_%A_%a.txt
                         #SBATCH -e /scratch/{user}/error_%A_%a.txt
 
-                        python {caller_file} --in-batch --batch-step "{step.name}" --batch-item $(($SLURM_ARRAY_TASK_ID + {offset})) ""
+                        python {caller_file} --in-batch --batch-step "{step.name}" --batch-item $(($SLURM_ARRAY_TASK_ID + {offset}))
                     """
                     array_job = textwrap.dedent(array_job).strip()
                     with NamedTemporaryFile(mode="w+", suffix=".sh", delete=False) as f:
