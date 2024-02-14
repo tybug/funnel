@@ -30,6 +30,10 @@ class Reject(Exception):
 # to the previous item instead of copying).
 COPY = object()
 
+# technically 1001, but let's not push our luck.
+# This is also configurable in slurm, but I don't feel like parsing slurm conf
+# files right now. 1001 is the default and also the value used on discovery.
+SLURM_MAX_ITEMS = 1000
 
 @dataclass
 class Run:
@@ -335,42 +339,66 @@ class Funnel:
             # invariant: the names of the output files/dirs are ordered
             # sequentially (no breaks in the ordering).
             item_ids = item_ids_in_dir(parent_step.storage_dir)
-            # TODO meta-batch ourselves in 1k batches if item_ids is too large.
-            # slurm has a hard limit of 1001 on --array. In fact, I think not
-            # only is that the limit on the number of elements, but we can't
-            # even specify a number over that value. So we'll have to do some
-            # trickery to get the numbers to pass correctly.
             if discovery_batch:
                 # launch the array job for processing this step.
                 f = argv[0]
                 user = getpass.getuser()
+
                 # https://rc-docs.northeastern.edu/en/latest/index.html
                 # %A = array job ID, %a = array index
                 # TODO fiogure out a better place for output and error logs
                 # in the array job. should we have a meta dir per Funnel
                 # where this stuff can go?
-                array_str = ",".join(str(n) for n in item_ids)
-                array_job = f"""
-                    #!/bin/bash
-                    #SBATCH --partition=short
-                    #SBATCH --job-name {step.name}
-                    #SBATCH --nodes 1
-                    #SBATCH --ntasks 1
-                    #SBATCH --array={array_str}  # array description (% is num simultaneous jobs, max 50)
-                    #SBATCH -o /scratch/{user}/output_%A_%a.txt
-                    #SBATCH -e /scratch/{user}/error_%A_%a.txt
 
-                    python {f} --in-batch --batch-step "{step.name}" --batch-item "$SLURM_ARRAY_TASK_ID"
-                """
-                array_job = textwrap.dedent(array_job).strip()
-                with NamedTemporaryFile(mode="w+", suffix=".sh", delete=False) as f:
-                    print(f"batch script for {step.name} at {f.name}")
-                    f.write(array_job)
-                process = subprocess.Popen(["sbatch", "--wait", f.name])
-                process.wait()
+                processes = []
+                # slurm has a hard limit on --array, so meta-batch ourselves here.
+                remaining = sorted(item_ids)
+                while remaining:
+                    batch = remaining[:SLURM_MAX_ITEMS]
+                    remaining = remaining[SLURM_MAX_ITEMS:]
+
+                    # not only is there a limit on the number of items in --array,
+                    # there is a limit on how high the values to --array can be
+                    # (in fact, the latter implies the former, with uniqueness).
+                    # so we have to get a bit fancy with how we pass things.
+                    # we'll compute an offset, pass the lowered numbers to --array,
+                    # and re-add the offset after.
+
+                    # rely on sorting so [0] is the smallest item.
+                    offset = batch[0]
+                    batch = [n - offset for n in batch]
+                    assert all(n >= 0 for n in batch)
+                    array_str = ",".join(str(n) for n in batch)
+                    array_job = f"""
+                        #!/bin/bash
+                        #SBATCH --partition=short
+                        #SBATCH --job-name {step.name}
+                        #SBATCH --nodes 1
+                        #SBATCH --ntasks 1
+                        #SBATCH --array={array_str}  # array description (% is num simultaneous jobs, max 50)
+                        #SBATCH -o /scratch/{user}/output_%A_%a.txt
+                        #SBATCH -e /scratch/{user}/error_%A_%a.txt
+
+                        python {f} --in-batch --batch-step "{step.name}" --batch-item $(($SLURM_ARRAY_TASK_ID + {offset})) ""
+                    """
+                    array_job = textwrap.dedent(array_job).strip()
+                    with NamedTemporaryFile(mode="w+", suffix=".sh", delete=False) as f:
+                        print(f"batch script for {step.name} at {f.name}")
+                        f.write(array_job)
+                    process = subprocess.Popen(["sbatch", "--wait", f.name])
+                    processes.append(process)
+
+                # this happens sequentially at the python level, but it doesn't
+                # matter, because the jobs are already submitted and running in
+                # parallel on discovery.
+                # if all the jobs are checked for termination, even sequentially,
+                # then we know they have all finished running here.
+                for process in processes:
+                    process.wait()
+
                 # even though we told it to wait until all tasks finished with
                 # --wait, let's give it a bit longer to clean up, just in case.
-                time.sleep(1)
+                time.sleep(5)
             else:
                 # no discovery batch mode. execute normally (sequential execution).
                 for item_id in item_ids:
