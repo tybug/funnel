@@ -383,7 +383,7 @@ class Funnel:
 
                         item_ids = [{", ".join([str(id) for id in batch])}]
                         task_id = os.environ["SLURM_ARRAY_TASK_ID"]
-                        item_id = item_ids[task_id]
+                        item_id = int(item_ids[task_id])
                         os.system(f'python {caller_file} --in-batch --batch-step "{step.name}" --batch-item {{item_id}}')
                         """,
                         suffix=".py",
