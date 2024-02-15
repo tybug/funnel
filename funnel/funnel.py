@@ -43,14 +43,6 @@ class Run:
     items: List[Any]
 
 
-def create_temporary_script(script_text, *, suffix) -> NamedTemporaryFile:
-    script_text = textwrap.dedent(script_text).strip()
-    with NamedTemporaryFile(mode="w+", suffix=suffix, delete=False) as f:
-        print(f"creating script at {f.name}")
-        f.write(script_text)
-    return f
-
-
 class Step:
     # subclasses must set these at the class level
     name = None
@@ -179,8 +171,21 @@ class Funnel:
 
     def __init__(self, storage_dir):
         self.storage_dir = Path(storage_dir)
-        # make sure the dir exists
-        self.storage_dir.mkdir(parents=True, exist_ok=True)
+        self.meta_dir = self.storage_dir / "_meta"
+        self.meta_scripts_dir = self.meta_dir / "scripts"
+        self.meta_output_dir = self.meta_dir / "output"
+        self.meta_errors_dir = self.meta_dir / "errors"
+
+        # make sure all the dirs exist
+        for p in [
+            self.storage_dir,
+            self.meta_dir,
+            self.meta_scripts_dir,
+            self.meta_output_dir,
+            self.meta_errors_dir,
+        ]:
+            p.mkdir(parents=True, exist_ok=True)
+
         self.steps = []
         # mapping of step to their parent
         self._parent_step = {}
@@ -197,6 +202,15 @@ class Funnel:
         self.argparser.add_argument(
             "--batch-item", dest="batch_item", type=int
         )  # item id in that step
+
+    def create_temporary_script(self, script_text, *, suffix) -> NamedTemporaryFile:
+        script_text = textwrap.dedent(script_text).strip()
+        with NamedTemporaryFile(
+            mode="w+", suffix=suffix, delete=False, dir=self.meta_scripts_dir
+        ) as f:
+            print(f"creating temporary script at {f.name}")
+            f.write(script_text)
+        return f
 
     def _find_step(self, step_name):
         for step in self.steps:
@@ -355,9 +369,6 @@ class Funnel:
 
                 # https://rc-docs.northeastern.edu/en/latest/index.html
                 # %A = array job ID, %a = array index
-                # TODO figure out a better place for output and error logs
-                # in the array job. should we have a meta dir per Funnel
-                # where this stuff can go?
 
                 # slurm has a hard limit on --array, so meta-batch ourselves here.
                 remaining = sorted(item_ids)
@@ -366,7 +377,7 @@ class Funnel:
                     remaining = remaining[SLURM_MAX_ITEMS:]
                     array_str = f"0-{len(batch)}"
 
-                    python_script_file = create_temporary_script(
+                    python_script_file = self.create_temporary_script(
                         f"""
                         import os
 
@@ -377,7 +388,7 @@ class Funnel:
                         """,
                         suffix=".py",
                     )
-                    array_job_file = create_temporary_script(
+                    array_job_file = self.create_temporary_script(
                         f"""
                         #!/bin/bash
                         #SBATCH --partition=short
@@ -385,8 +396,8 @@ class Funnel:
                         #SBATCH --nodes 1
                         #SBATCH --ntasks 1
                         #SBATCH --array={array_str}
-                        #SBATCH -o /scratch/{user}/output_%A_%a.txt
-                        #SBATCH -e /scratch/{user}/error_%A_%a.txt
+                        #SBATCH -o {self.meta_output_dir}/%A_%a.txt
+                        #SBATCH -e {self.meta_errors_dir}/%A_%a.txt
 
                         python {python_script_file.name}
                         """,
