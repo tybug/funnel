@@ -35,6 +35,15 @@ COPY = object()
 # files right now. 1001 is the default and also the value used on discovery.
 SLURM_MAX_ITEMS = 1000
 
+# some partitions have a different max time than the default. we'll always use
+# the max, unless the Step specifies otherwise.
+SLURM_PARTITION_MAX_TIMES = {
+    # hh:mm:ss
+    "debug": "00:20:00",
+    "express": "00:60:00",
+    "short": "24:00:00",
+}
+
 
 @dataclass
 class Run:
@@ -44,9 +53,15 @@ class Run:
 
 
 class Step:
-    # subclasses must set these at the class level
+    # subclasses must set these two at the class level
     name = None
     output = None
+
+    # slurm/discovery config
+    partition = "short"
+    # set to None to use default max time limit for this partition
+    time_limit = None
+    cpus_per_task = 1
 
     def __init__(self, storage_dir, *, parent_step):
         # step-specific metadata. steps can put anything they want here, e.g.
@@ -389,6 +404,10 @@ class Funnel:
                     batch = remaining[:SLURM_MAX_ITEMS]
                     remaining = remaining[SLURM_MAX_ITEMS:]
                     array_str = f"0-{len(batch) - 1}"
+                    partition = step.partition
+                    time_limit = SLURM_PARTITION_MAX_TIMES[partition]
+                    if step.time_limit is not None:
+                        time_limit = step.time_limit
 
                     python_script_file = self.create_temporary_script(
                         f"""
@@ -404,11 +423,13 @@ class Funnel:
                     array_job_file = self.create_temporary_script(
                         f"""
                         #!/bin/bash
-                        #SBATCH --partition=short
+                        #SBATCH --partition={partition}
                         #SBATCH --job-name {step.name}
                         #SBATCH --nodes 1
                         #SBATCH --ntasks 1
+                        #SBATCH --cpus-per-task {step.cpus_per_task}
                         #SBATCH --array={array_str}
+                        #SBATCH --time={time_limit}
                         #SBATCH -o {self.meta_output_dir}/%A_%a.txt
                         #SBATCH -e {self.meta_errors_dir}/%A_%a.txt
 
