@@ -94,7 +94,7 @@ class Step:
             metadata = {"status": "rejected"}
             self._write_metadata(metadata, i)
             return
-        except Exception as e:
+        except Exception:
             metadata = {
                 "status": "error",
                 "error_message": traceback.format_exc(),
