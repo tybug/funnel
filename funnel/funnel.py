@@ -53,11 +53,14 @@ class Run:
 
 
 class Step:
-    # subclasses must set these two at the class level
+    # required config options
     name = None
     output = None
 
-    # slurm/discovery config
+    # other config options
+    items_per_node = 1
+
+    # slurm/discovery config options
     partition = "short"
     # set to None to use default max time limit for this partition
     time_limit = None
