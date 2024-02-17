@@ -388,7 +388,7 @@ class Funnel:
                 while remaining:
                     batch = remaining[:SLURM_MAX_ITEMS]
                     remaining = remaining[SLURM_MAX_ITEMS:]
-                    array_str = f"0-{len(batch)}"
+                    array_str = f"0-{len(batch) - 1}"
 
                     python_script_file = self.create_temporary_script(
                         f"""
