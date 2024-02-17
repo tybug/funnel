@@ -272,7 +272,7 @@ class Funnel:
             # if/when we add a tree structure to steps, ie branching steps which
             # can compute final leaf-like computations in parallel with other
             # sibling steps (which then continue along their children steps).
-            step = self._find_step(args.from_step)
+            step = self._find_step(args.after_step)
             i = self.steps.index(step) + 1
             for step in self.steps[i:]:
                 self._run_step(step, argv, discovery_batch=discovery_batch)
