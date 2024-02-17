@@ -434,4 +434,8 @@ class Funnel:
         # this avoids confusing when looking at the data; the intermediate step
         # is only necessary to accomodate the distributed nature of discovery.
         # this line can be commented out if needed for debugging.
-        shutil.rmtree(step.metadata_dir)
+        #
+        # it's possible the dir may not exist if the step had 0 input items
+        # (no items processed).
+        if step.metadata_dir.exists():
+            shutil.rmtree(step.metadata_dir)
