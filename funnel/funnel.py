@@ -11,9 +11,9 @@ from tempfile import NamedTemporaryFile
 import subprocess
 import time
 from typing import List
-import getpass
 from argparse import ArgumentParser
 import traceback
+import math
 
 from funnel.utils import item_ids_in_dir
 from funnel.utils import dumps
@@ -396,21 +396,27 @@ class Funnel:
             if discovery_batch:
                 # launch the array job for processing this step.
                 caller_file = argv[0]
-                user = getpass.getuser()
 
-                # https://rc-docs.northeastern.edu/en/latest/index.html
+                # https://rc-docs.northeastern.edu/en/latest/hardware/partitions.html
                 # %A = array job ID, %a = array index
+                #
+                # good docs for tasks vs cpus vs cores vs ...:
+                # https://login.scg.stanford.edu/faqs/cores/
+                # slightly worse reference:
+                # https://docs.ycrc.yale.edu/clusters-at-yale/job-scheduling/
 
                 # slurm has a hard limit on --array, so meta-batch ourselves here.
                 remaining = sorted(item_ids)
+                partition = step.partition
+                time_limit = SLURM_PARTITION_MAX_TIMES[partition]
+                if step.time_limit is not None:
+                    time_limit = step.time_limit
+                items_per_node = step.items_per_node
+                max_items_per_batch = SLURM_MAX_ITEMS * items_per_node
                 while remaining:
-                    batch = remaining[:SLURM_MAX_ITEMS]
-                    remaining = remaining[SLURM_MAX_ITEMS:]
-                    array_str = f"0-{len(batch) - 1}"
-                    partition = step.partition
-                    time_limit = SLURM_PARTITION_MAX_TIMES[partition]
-                    if step.time_limit is not None:
-                        time_limit = step.time_limit
+                    batch = remaining[:max_items_per_batch]
+                    remaining = remaining[max_items_per_batch:]
+                    array_str = f"0-{math.ceil(len(batch) / items_per_node) - 1}"
 
                     python_script_file = self.create_temporary_script(
                         f"""
@@ -418,8 +424,20 @@ class Funnel:
 
                         item_ids = [{", ".join([str(id) for id in batch])}]
                         task_id = int(os.environ["SLURM_ARRAY_TASK_ID"])
-                        item_id = item_ids[task_id]
-                        os.system(f'python {caller_file} --in-batch --batch-step "{step.name}" --batch-item {{item_id}}')
+
+                        for i in range({items_per_node}):
+                            item_index = task_id * {items_per_node} + i
+
+                            # can happen if items_per_node > 1, we're the last task in the array,
+                            # and the number of items doesn't fit cleanly into items_per_node.
+                            # e.g. consider batch=range(100), items_per_node=3. then the last task
+                            # has only a single item (index 100) to process.
+                            if item_index > len(item_ids):
+                                print(f"index {{item_index}} out of bounds, skipping ({items_per_node=}, {{task_id=}})")
+                                break
+
+                            item_id = item_ids[item_index]
+                            os.system(f'python {caller_file} --in-batch --batch-step "{step.name}" --batch-item {{item_id}}')
                         """,
                         suffix=".py",
                     )
