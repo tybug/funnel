@@ -417,7 +417,7 @@ class Funnel:
 
                 # even though we told it to wait until all tasks finished with
                 # --wait, let's give it a bit longer to clean up, just in case.
-                time.sleep(5)
+                time.sleep(1)
             else:
                 # no discovery batch mode. execute normally (sequential execution).
                 for item_id in item_ids:
