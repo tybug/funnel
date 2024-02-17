@@ -195,6 +195,7 @@ class Funnel:
 
         self.argparser = ArgumentParser()
         self.argparser.add_argument("--from-step", dest="from_step")
+        self.argparser.add_argument("--after-step", dest="after_step")
 
         # should not be set by users. set internally by code.
         self.argparser.add_argument("--in-batch", dest="in_batch", action="store_true")
@@ -261,6 +262,18 @@ class Funnel:
             # all steps after (and including) this step.
             step = self._find_step(args.from_step)
             i = self.steps.index(step)
+            for step in self.steps[i:]:
+                self._run_step(step, argv, discovery_batch=discovery_batch)
+            return
+
+        if args.after_step is not None:
+            # like from_step, but not including the specified step.
+            # this will get more complicated (and diverge further from from_step)
+            # if/when we add a tree structure to steps, ie branching steps which
+            # can compute final leaf-like computations in parallel with other
+            # sibling steps (which then continue along their children steps).
+            step = self._find_step(args.from_step)
+            i = self.steps.index(step) + 1
             for step in self.steps[i:]:
                 self._run_step(step, argv, discovery_batch=discovery_batch)
             return
