@@ -27,5 +27,6 @@ class JsonEncoder(_JSONEncoder):
         return super().default(obj)
 
 
-def dumps(obj):
-    return json.dumps(obj, cls=JsonEncoder)
+def dumps(obj, *args, **kwargs):
+    kwargs["cls"] = JsonEncoder
+    return json.dumps(obj, *args, **kwargs)
