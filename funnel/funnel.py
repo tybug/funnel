@@ -92,7 +92,7 @@ class Step:
     def item(self, item, i):
         pass
 
-    def output_path(self, i):
+    def output_path(self, i) -> Path:
         return self.storage_dir / f"{i}"
 
     def add_metadata(self, metadata):
