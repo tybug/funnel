@@ -68,6 +68,8 @@ class Step:
     # set to None to use default max time limit for this partition
     time_limit = None
     cpus_per_task = 1
+    # memory per task in mb
+    memory = None
 
     def __init__(self, storage_dir, *, parent_step):
         # step-specific metadata. steps can put anything they want here, e.g.
@@ -462,6 +464,7 @@ class Funnel:
                         #SBATCH --cpus-per-task {step.cpus_per_task}
                         #SBATCH --array={array_str}
                         #SBATCH --time={time_limit}
+                        {f"#SBATCH --mem={step.memory}" if step.memory is not None else ""}
                         #SBATCH -o {self.meta_output_dir}/%A_%a.txt
                         #SBATCH -e {self.meta_errors_dir}/%A_%a.txt
 
