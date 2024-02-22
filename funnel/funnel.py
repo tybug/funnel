@@ -24,6 +24,9 @@ class Reject(Exception):
     Raised when a step rejects (filters out) the current item.
     """
 
+    def __init__(self, reason):
+        self.reason = reason
+
 
 # return this from Step#item to indicte that the item is unchanged from the
 # previous step. Used both for convenience and to reduce disk storage (we symlink
@@ -108,8 +111,16 @@ class Step:
 
         try:
             output = self.item(item, i)
-        except Reject:
-            metadata = {"status": "rejected"}
+        except Reject as e:
+            # if the step wrote to the output directory here before rejecting it,
+            # clean it up so future steps don't think it was valid.
+            p = self.output_path(i)
+            if p.is_file():
+                p.unlink()
+            if p.is_dir():
+                shutil.rmtree(p)
+
+            metadata = {"status": "rejected", "rejected_reason": e.reason}
             self._write_metadata(metadata, i)
             return
         except Exception:
@@ -170,7 +181,7 @@ class FilterStep(Step):
 
     def item(self, item, i):
         if not self.filter(item):
-            raise Reject()
+            raise Reject("rejected by filter")
         # filter steps don't modify the accepted items, so tell Funnel to copy
         # the item from the previous step. This differs from `return item` as
         # the item may be a path with a full directory structure (output = "path").
@@ -339,7 +350,7 @@ class Funnel:
             "count_valid": 0,
             "count_rejected": 0,
             "count_error": 0,
-            "rejected": [],
+            "rejected": {},
             "errors": {},
             "item_metadata": {},
         }
@@ -353,7 +364,7 @@ class Funnel:
 
             if item_metadata["status"] == "rejected":
                 metadata["count_rejected"] += 1
-                metadata["rejected"].append(i)
+                metadata["rejected"][i] = item_metadata["rejected_reason"]
             elif item_metadata["status"] == "error":
                 metadata["count_error"] += 1
                 metadata["errors"][i] = item_metadata["error_message"]
