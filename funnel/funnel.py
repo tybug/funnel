@@ -290,15 +290,17 @@ class Funnel:
 
         return StepAdder(self, step)
 
-    def children_of(self, step):
+    def children_of(self, step, *, include_parent=False):
         children = []
         for child in self._step_children[step]:
             children.append(child)
             children += self.children_of(child)
+        if include_parent:
+            children = [step] + children
         return children
 
     def all_steps(self):
-        return [self._initial_step] + self.children_of(self._initial_step)
+        return self.children_of(self._initial_step, include_parent=True)
 
     def run(self, argv, *, discovery_batch=False):
         """
@@ -329,7 +331,7 @@ class Funnel:
         if args.from_step is not None:
             # all steps after (and including) this step.
             step = self._find_step(args.from_step)
-            for step in self.children_of(step):
+            for step in self.children_of(step, include_parent=True):
                 self._run_step(step, argv, discovery_batch=discovery_batch)
             return
 
