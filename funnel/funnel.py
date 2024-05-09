@@ -105,8 +105,7 @@ class Step:
         metadata = {"metadata": self.metadata, **metadata}
         self.metadata_dir.mkdir(exist_ok=True)
         with open(self.metadata_dir / f"{i}", "w+") as f:
-            v = dumps(metadata)
-            f.write(v)
+            f.write(dumps(metadata) + "\n")
 
     def process_item(self, item, i):
         # clear on metadata each item, so any add_metadata is fresh
@@ -145,10 +144,8 @@ class Step:
                     'Step must return a value from item() for output == "json"'
                 )
 
-            output = dumps(output)
-
             with open(output_path, "w+") as f:
-                f.write(output)
+                f.write(dumps(output) + "\n")
         # for output == "path" which doesn't return COPY, the step is responsible
         # for writing to output_path itself. TODO we could check that something
         # has in fact been written to output_path in this case
@@ -534,7 +531,7 @@ class Funnel:
         metadata = self._collect_metadata(step)
         metadata = {"started_at": started_at, "ended_at": ended_at, **metadata}
         with open(step.storage_dir / self.metadata_filename, "w+") as f:
-            f.write(dumps(metadata))
+            f.write(dumps(metadata) + "\n")
 
         # now that we're done collecting metadata, we can remove that directory.
         # this avoids confusing when looking at the data; the intermediate step
