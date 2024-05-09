@@ -156,6 +156,8 @@ class Step:
         metadata = {"status": "valid"}
         self._write_metadata(metadata, i)
 
+    def log(self, message):
+        print(f"[{self.name}] {message}")
 
 class InputStep(Step):
     def __init__(self, storage_dir):
