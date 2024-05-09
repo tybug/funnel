@@ -13,6 +13,7 @@ import time
 from typing import List
 from argparse import ArgumentParser
 import traceback
+from collections import defaultdict
 import math
 
 from funnel.utils import item_ids_in_dir
@@ -71,13 +72,13 @@ class Step:
     # memory per task in mb
     memory = None
 
-    def __init__(self, storage_dir, *, parent_step):
+    def __init__(self, storage_dir, *, parent):
         # step-specific metadata. steps can put anything they want here, e.g.
         # stacktraces for items that were rejected as a result of errors.
         self.metadata = {}
         self.storage_dir = storage_dir / self.name
         self.metadata_dir = self.storage_dir / "_processing_results"
-        self.parent_step = parent_step
+        self.parent = parent
 
     def __str__(self):
         return self.name
@@ -135,8 +136,8 @@ class Step:
 
         output_path = self.output_path(i)
         if output is COPY:
-            assert self.parent_step is not None
-            previous_output_path = self.parent_step.output_path(i)
+            assert self.parent is not None
+            previous_output_path = self.parent.output_path(i)
             output_path.symlink_to(previous_output_path.resolve())
         elif self.output == "json":
             if output is None:
@@ -157,8 +158,8 @@ class Step:
 
 
 class InputStep(Step):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, storage_dir):
+        super().__init__(storage_dir, parent=None)
         # for caching purposes
         self._items = None
 
@@ -197,6 +198,21 @@ class FilterStep(Step):
         """
 
 
+def _check_step_class(StepClass):
+    assert StepClass.name is not None, f"must set a name for {StepClass}"
+    assert StepClass.output is not None, f"must set an output for {StepClass}"
+
+
+# for ergonomic return chaining
+class StepAdder:
+    def __init__(self, funnel, step):
+        self.funnel = funnel
+        self.step = step
+
+    def add_child_step(self, StepClass):
+        return self.funnel.add_step(StepClass, parent=self.step)
+
+
 class Funnel:
     metadata_filename = "_statistics.json"
 
@@ -218,11 +234,11 @@ class Funnel:
             p.mkdir(parents=True, exist_ok=True)
 
         self.steps = []
+        self._initial_step = None
         # mapping of step to their parent
         self._parent_step = {}
-        # for now, assume that steps are added in a linear hierarchy after their
-        # parent. We can add tree parent hierarchies later.
-        self._most_recently_added_step = None
+        # mapping of step to their children
+        self._step_children = defaultdict(list)
 
         self.argparser = ArgumentParser()
         self.argparser.add_argument("--from-step", dest="from_step")
@@ -245,23 +261,42 @@ class Funnel:
         return f
 
     def _find_step(self, step_name):
-        for step in self.steps:
+        for step in self.all_steps():
             if step.name == step_name:
                 return step
-        raise Exception(f"could not find step {step_name} (options: {self.steps})")
+        raise Exception(
+            f"could not find step {step_name} (options: {self.all_steps()})"
+        )
 
-    def add_step(self, StepClass):
-        assert StepClass.name is not None, f"must set a name for {StepClass}"
-        assert StepClass.output is not None, f"must set an output for {StepClass}"
+    def initial_step(self, StepClass):
+        _check_step_class(StepClass)
+        step = StepClass(self.storage_dir)
+        assert isinstance(step, InputStep)
 
-        parent_step = self._most_recently_added_step
-        step = StepClass(self.storage_dir, parent_step=parent_step)
-        # first step has to be an InputStep, and nothing else can be an InputStep.
-        assert isinstance(step, InputStep) == (len(self.steps) == 0)
+        self._initial_step = step
+        return StepAdder(self, step)
 
-        self.steps.append(step)
-        self._parent_step[step] = parent_step
-        self._most_recently_added_step = step
+    def add_step(self, StepClass, *, parent):
+        _check_step_class(StepClass)
+
+        step = StepClass(self.storage_dir, parent=parent)
+        # a step is an input step iff it is the first step in the funnel.
+        assert not isinstance(step, InputStep)
+
+        self._parent_step[step] = parent
+        self._step_children[parent].append(step)
+
+        return StepAdder(self, step)
+
+    def children_of(self, step):
+        children = []
+        for child in self._step_children[step]:
+            children.append(child)
+            children += self.children_of(child)
+        return children
+
+    def all_steps(self):
+        return [self._initial_step] + self.children_of(self._initial_step)
 
     def run(self, argv, *, discovery_batch=False):
         """
@@ -292,8 +327,7 @@ class Funnel:
         if args.from_step is not None:
             # all steps after (and including) this step.
             step = self._find_step(args.from_step)
-            i = self.steps.index(step)
-            for step in self.steps[i:]:
+            for step in self.children_of(step):
                 self._run_step(step, argv, discovery_batch=discovery_batch)
             return
 
@@ -304,12 +338,11 @@ class Funnel:
             # can compute final leaf-like computations in parallel with other
             # sibling steps (which then continue along their children steps).
             step = self._find_step(args.after_step)
-            i = self.steps.index(step) + 1
-            for step in self.steps[i:]:
+            for step in self.children_of(step):
                 self._run_step(step, argv, discovery_batch=discovery_batch)
             return
 
-        for step in self.steps:
+        for step in self.all_steps():
             self._run_step(step, argv, discovery_batch=discovery_batch)
 
     def run_from_step(self, /, StepClass):
