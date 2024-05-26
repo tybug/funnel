@@ -182,7 +182,7 @@ class FilterStep(Step):
     output = "copy"
 
     def item(self, item, i):
-        if not self.filter(item):
+        if not self.filter(item, i):
             raise Reject("rejected by filter")
         # filter steps don't modify the accepted items, so tell Funnel to copy
         # the item from the previous step. This differs from `return item` as
@@ -190,7 +190,7 @@ class FilterStep(Step):
         return COPY
 
     @abstractmethod
-    def filter(self, item):
+    def filter(self, item, i):
         """
         Returns True if the item is valid and should be kept, and False
         otherwise.
