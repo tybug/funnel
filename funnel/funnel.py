@@ -242,6 +242,7 @@ class Funnel:
         self.argparser = ArgumentParser()
         self.argparser.add_argument("--from-step", dest="from_step")
         self.argparser.add_argument("--after-step", dest="after_step")
+        self.argparser.add_argument("--to-step", dest="to_step")
 
         # should not be set by users. set internally by code.
         self.argparser.add_argument("--in-batch", dest="in_batch", action="store_true")
@@ -259,7 +260,7 @@ class Funnel:
             f.write(script_text)
         return f
 
-    def _find_step(self, step_name):
+    def _find_step(self, step_name) -> Step:
         for step in self.all_steps():
             if step.name == step_name:
                 return step
@@ -325,25 +326,28 @@ class Funnel:
             self._run_item(step, args.batch_item)
             return
 
-        if args.from_step is not None:
+        if args.to_step is not None:
+            step = self._find_step(args.to_step)
+            steps = [step]
+            while step.parent is not None:
+                steps.insert(0, step.parent)
+                step = step.parent
+        elif args.from_step is not None:
             # all steps after (and including) this step.
             step = self._find_step(args.from_step)
-            for step in self.children_of(step, include_parent=True):
-                self._run_step(step, argv, discovery_batch=discovery_batch)
-            return
-
-        if args.after_step is not None:
+            steps = self.children_of(step, include_parent=True)
+        elif args.after_step is not None:
             # like from_step, but not including the specified step.
             # this will get more complicated (and diverge further from from_step)
             # if/when we add a tree structure to steps, ie branching steps which
             # can compute final leaf-like computations in parallel with other
             # sibling steps (which then continue along their children steps).
             step = self._find_step(args.after_step)
-            for step in self.children_of(step):
-                self._run_step(step, argv, discovery_batch=discovery_batch)
-            return
+            steps = self.children_of(step)
+        else:
+            steps = self.all_steps()
 
-        for step in self.all_steps():
+        for step in steps:
             self._run_step(step, argv, discovery_batch=discovery_batch)
 
     def run_from_step(self, /, StepClass):
