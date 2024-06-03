@@ -156,6 +156,7 @@ class Step:
     def log(self, message):
         print(f"[{self.name}] {message}")
 
+
 class InputStep(Step):
     def __init__(self, storage_dir):
         super().__init__(storage_dir, parent=None)
@@ -197,6 +198,24 @@ class FilterStep(Step):
         """
 
 
+class Script:
+    # required config options
+    name = None
+
+    # optional config options
+    # TODO enforce depends_on by running those steps if not already ran? or just
+    # assert that these steps have run. need a way to check/update which steps have
+    # finished. use central _meta dir for this
+    depends_on = []
+
+    def __init__(self, funnel):
+        self.funnel = funnel
+
+    @abstractmethod
+    def run(self):
+        pass
+
+
 def _check_step_class(StepClass):
     assert StepClass.name is not None, f"must set a name for {StepClass}"
     assert StepClass.output is not None, f"must set an output for {StepClass}"
@@ -233,6 +252,7 @@ class Funnel:
             p.mkdir(parents=True, exist_ok=True)
 
         self.steps = []
+        self.scripts = []
         self._initial_step = None
         # mapping of step to their parent
         self._parent_step = {}
@@ -243,6 +263,7 @@ class Funnel:
         self.argparser.add_argument("--from-step", dest="from_step")
         self.argparser.add_argument("--after-step", dest="after_step")
         self.argparser.add_argument("--to-step", dest="to_step")
+        self.argparser.add_argument("--script", dest="script")
 
         # should not be set by users. set internally by code.
         self.argparser.add_argument("--in-batch", dest="in_batch", action="store_true")
@@ -268,6 +289,14 @@ class Funnel:
             f"could not find step {step_name} (options: {self.all_steps()})"
         )
 
+    def _find_script(self, script_name) -> Script:
+        for script in self.scripts:
+            if script.name == script_name:
+                return script
+        raise Exception(
+            f"could not find script {script_name} (options: {[script.name for script in self.scripts]})"
+        )
+
     def initial_step(self, StepClass):
         _check_step_class(StepClass)
         step = StepClass(self.storage_dir)
@@ -287,6 +316,10 @@ class Funnel:
         self._step_children[parent].append(step)
 
         return StepAdder(self, step)
+
+    def add_script(self, ScriptClass):
+        script = ScriptClass(self)
+        self.scripts.append(script)
 
     def children_of(self, step, *, include_parent=False):
         children = []
@@ -324,6 +357,11 @@ class Funnel:
         if args.in_batch:
             step = self._find_step(args.batch_step)
             self._run_item(step, args.batch_item)
+            return
+
+        if args.script is not None:
+            script = self._find_script(args.script)
+            script.run()
             return
 
         if args.to_step is not None:
