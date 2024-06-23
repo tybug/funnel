@@ -210,9 +210,14 @@ class Script:
 
     def __init__(self, funnel):
         self.funnel = funnel
+        self.argparser = ArgumentParser()
+        self.add_arguments(self.argparser)
+
+    def add_arguments(self, parser):
+        pass
 
     @abstractmethod
-    def run(self):
+    def run(self, **kwargs):
         pass
 
 
@@ -351,17 +356,22 @@ class Funnel:
             as we will attempt to run various discovery-specific commands which
             will error if run on any other system.
         """
-        args = self.argparser.parse_args(argv[1:])
+        args, remaining_args = self.argparser.parse_known_args(argv[1:])
+
+        if args.script is not None:
+            script = self._find_script(args.script)
+            args = script.argparser.parse_args(remaining_args)
+            script.run(**args.__dict__)
+            return
+
+        # unknown args are further parsed by --script, but otherwise disallowed.
+        if remaining_args:
+            self.argparser.error(f"unrecognized arguments: {' '.join(remaining_args)}")
 
         # we're in the middle of a batch. run a single item in a single step.
         if args.in_batch:
             step = self._find_step(args.batch_step)
             self._run_item(step, args.batch_item)
-            return
-
-        if args.script is not None:
-            script = self._find_script(args.script)
-            script.run()
             return
 
         if args.to_step is not None:
