@@ -15,6 +15,7 @@ from argparse import ArgumentParser
 import traceback
 from collections import defaultdict
 import math
+import sys
 
 from funnel.utils import item_ids_in_dir
 from funnel.utils import dumps
@@ -517,6 +518,12 @@ class Funnel:
                     remaining = remaining[max_items_per_batch:]
                     array_str = f"0-{math.ceil(len(batch) / items_per_node) - 1}"
 
+                    # use the same python as we were executed with
+                    python = sys.executable
+                    # > If Python is unable to retrieve the real path to its
+                    # > executable, sys.executable will be an empty string or None
+                    # > https://docs.python.org/3/library/sys.html
+                    assert python not in [None, ""]
                     python_script_file = self.create_temporary_script(
                         f"""
                         import os
@@ -536,7 +543,7 @@ class Funnel:
                                 break
 
                             item_id = item_ids[item_index]
-                            os.system(f'python {caller_file} --in-batch --batch-step "{step.name}" --batch-item {{item_id}}')
+                            os.system(f'{python} {caller_file} --in-batch --batch-step "{step.name}" --batch-item {{item_id}}')
                         """,
                         suffix=".py",
                     )
@@ -554,7 +561,7 @@ class Funnel:
                         #SBATCH -o {self.meta_output_dir}/%A_%a.txt
                         #SBATCH -e {self.meta_errors_dir}/%A_%a.txt
 
-                        python {python_script_file.name}
+                        {python} {python_script_file.name}
                         """,
                         suffix=".sh",
                     )
