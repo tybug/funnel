@@ -266,6 +266,7 @@ class Funnel:
         self._step_children = defaultdict(list)
 
         self.argparser = ArgumentParser()
+        self.argparser.add_argument("--step", dest="step")
         self.argparser.add_argument("--from-step", dest="from_step")
         self.argparser.add_argument("--after-step", dest="after_step")
         self.argparser.add_argument("--to-step", dest="to_step")
@@ -375,7 +376,10 @@ class Funnel:
             self._run_item(step, args.batch_item)
             return
 
-        if args.to_step is not None:
+        if args.step is not None:
+            # run exactly this step
+            steps = [self._find_step(args.step)]
+        elif args.to_step is not None:
             step = self._find_step(args.to_step)
             steps = [step]
             while step.parent is not None:
