@@ -266,6 +266,12 @@ class Funnel:
         self._step_children = defaultdict(list)
 
         self.argparser = ArgumentParser()
+        self.argparser.add_argument(
+            "--discovery-batch",
+            dest="discovery_batch",
+            choices=["true", "false"],
+            default=None,
+        )
         self.argparser.add_argument("--step", dest="step")
         self.argparser.add_argument(
             "--item-ids", dest="item_ids", nargs="+", default=None, type=int
@@ -360,8 +366,13 @@ class Funnel:
             If discovery_batch is True, you *must* be running this on discovery,
             as we will attempt to run various discovery-specific commands which
             will error if run on any other system.
+
+            Can be overriden with the --discovery-batch command line argument.
         """
         args, remaining_args = self.argparser.parse_known_args(argv[1:])
+
+        if args.discovery_batch is not None:
+            discovery_batch = args.discovery_batch == "true"
 
         if args.script is not None:
             script = self._find_script(args.script)
