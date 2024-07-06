@@ -404,9 +404,11 @@ class Funnel:
             steps = self.all_steps()
 
         for step in steps:
-            self._run_step(
-                step, argv, discovery_batch=discovery_batch, item_ids=args.item_ids
-            )
+            if args.item_ids:
+                for item_id in args.item_ids:
+                    self._run_item(step, item_id)
+            else:
+                self._run_step(step, argv, discovery_batch=discovery_batch)
 
     def run_from_step(self, /, StepClass):
         """
@@ -477,9 +479,7 @@ class Funnel:
         val = self._input(step, i)
         step.process_item(val, i)
 
-    def _run_step(
-        self, step: Step, argv: List[str], *, discovery_batch=False, item_ids=None
-    ):
+    def _run_step(self, step: Step, argv: List[str], *, discovery_batch=False):
         print(f"running step {step.name}")
         # recreate the directory for this step
         if step.storage_dir.exists():
@@ -501,10 +501,9 @@ class Funnel:
                 step.process_item(item, i)
         else:
             parent_step = self._parent_step[step]
-            item_ids_ = item_ids_in_dir(parent_step.storage_dir)
-            if item_ids is not None:
-                item_ids_ = [n for n in item_ids_ if n in item_ids]
-            item_ids = item_ids_
+            # invariant: the names of the output files/dirs are ordered
+            # sequentially (no breaks in the ordering).
+            item_ids = item_ids_in_dir(parent_step.storage_dir)
             if discovery_batch:
                 # launch the array job for processing this step.
                 caller_file = argv[0]
