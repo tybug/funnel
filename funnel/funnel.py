@@ -16,6 +16,7 @@ import traceback
 from collections import defaultdict
 import math
 import sys
+import inspect
 
 from funnel.utils import item_ids_in_dir
 from funnel.utils import dumps
@@ -58,14 +59,17 @@ class Run:
 
 
 class Step:
-    # required config options
+    ## required config options
     name = None
     output = None
 
-    # other config options
+    ## other config options
     items_per_node = 1
+    # call self.item for each item this many times, passing iteration=n on the
+    # nth iteration.
+    iterations = 1
 
-    # slurm/discovery config options
+    ## slurm/discovery config options
     partition = "short"
     # set to None to use default max time limit for this partition
     time_limit = None
@@ -108,12 +112,21 @@ class Step:
         with open(self.metadata_dir / f"{i}", "w+") as f:
             f.write(dumps(metadata) + "\n")
 
-    def process_item(self, item, i):
+    def process_item(self, item, i, *, iteration):
         # clear on metadata each item, so any add_metadata is fresh
         self.metadata.clear()
 
+        # only pass iteration if self.item requests it with a kw-only param
+        kwargs = {}
+        for param in inspect.signature(self.item).parameters.values():
+            if (
+                param.kind is inspect.Parameter.KEYWORD_ONLY
+                and param.name == "iteration"
+            ):
+                kwargs["iteration"] = iteration
+
         try:
-            output = self.item(item, i)
+            output = self.item(item, i, **kwargs)
         except Reject as e:
             # if the step wrote to the output directory here before rejecting it,
             # clean it up so future steps don't think it was valid.
@@ -281,12 +294,16 @@ class Funnel:
         self.argparser.add_argument("--to-step", dest="to_step")
         self.argparser.add_argument("--script", dest="script")
 
-        # should not be set by users. set internally by code.
+        # these should not be set by users. set internally by code.
         self.argparser.add_argument("--in-batch", dest="in_batch", action="store_true")
-        self.argparser.add_argument("--batch-step", dest="batch_step")  # step name
+        # step name
+        self.argparser.add_argument("--batch-step", dest="batch_step")
+        # item id in that step
+        self.argparser.add_argument("--batch-item", dest="batch_item", type=int)
+        # step iteration for this item
         self.argparser.add_argument(
-            "--batch-item", dest="batch_item", type=int
-        )  # item id in that step
+            "--batch-iteration", dest="batch_iteration", type=int
+        )
 
     def create_temporary_script(self, script_text, *, suffix) -> NamedTemporaryFile:
         script_text = textwrap.dedent(script_text).strip()
@@ -387,7 +404,7 @@ class Funnel:
         # we're in the middle of a batch. run a single item in a single step.
         if args.in_batch:
             step = self._find_step(args.batch_step)
-            self._run_item(step, args.batch_item)
+            self._run_item(step, args.batch_item, for_iteration=args.batch_iteration)
             return
 
         if args.step is not None:
@@ -486,9 +503,13 @@ class Funnel:
 
         return metadata
 
-    def _run_item(self, step: Step, i):
+    def _run_item(self, step: Step, i, *, for_iteration=None):
         val = self._input(step, i)
-        step.process_item(val, i)
+        iterations = (
+            range(step.iterations) if for_iteration is None else [for_iteration]
+        )
+        for iteration in iterations:
+            step.process_item(val, i, iteration=iteration)
 
     def _run_step(self, step: Step, argv: List[str], *, discovery_batch=False):
         print(f"running step {step.name}")
@@ -506,15 +527,16 @@ class Funnel:
         if isinstance(step, InputStep):
             # load all the items...
             items = step.get_items()
+            # for now, multi-iteration input steps are nonsensical.
+            assert step.iterations == 1
             # ...then (ab)use process_item to handle writing each item to its file
             # (if the InputStep has output == "json").
             for i, item in enumerate(items):
-                step.process_item(item, i)
+                step.process_item(item, i, iteration=0)
         else:
             parent_step = self._parent_step[step]
-            # invariant: the names of the output files/dirs are ordered
-            # sequentially (no breaks in the ordering).
             item_ids = item_ids_in_dir(parent_step.storage_dir)
+            item_ids = sorted(item_ids)
             if discovery_batch:
                 # launch the array job for processing this step.
                 caller_file = argv[0]
@@ -528,7 +550,9 @@ class Funnel:
                 # https://docs.ycrc.yale.edu/clusters-at-yale/job-scheduling/
 
                 # slurm has a hard limit on --array, so meta-batch ourselves here.
-                remaining = sorted(item_ids)
+                remaining = []
+                for iteration in range(step.iterations):
+                    remaining += [(iteration, item_id) for item_id in item_ids]
                 partition = step.partition
                 time_limit = SLURM_PARTITION_MAX_TIMES[partition]
                 if step.time_limit is not None:
@@ -550,7 +574,7 @@ class Funnel:
                         f"""
                         import os
 
-                        item_ids = [{", ".join([str(id) for id in batch])}]
+                        item_ids = [{", ".join([str([iteration, id]) for (iteration, id) in batch])}]
                         task_id = int(os.environ["SLURM_ARRAY_TASK_ID"])
 
                         for i in range({items_per_node}):
@@ -564,8 +588,8 @@ class Funnel:
                                 print(f"index {{item_index}} out of bounds, skipping ({items_per_node=}, {{task_id=}})")
                                 break
 
-                            item_id = item_ids[item_index]
-                            os.system(f'{python} {caller_file} --in-batch --batch-step "{step.name}" --batch-item {{item_id}}')
+                            (iteration, item_id) = item_ids[item_index]
+                            os.system(f'{python} {caller_file} --in-batch --batch-step "{step.name}" --batch-iteration {{iteration}} --batch-item {{item_id}}')
                         """,
                         suffix=".py",
                     )
@@ -605,8 +629,7 @@ class Funnel:
             else:
                 # no discovery batch mode. execute normally (sequential execution).
                 for item_id in item_ids:
-                    val = self._input(step, item_id)
-                    step.process_item(val, item_id)
+                    self._run_item(step, item_id)
 
         ended_at = datetime.now(timezone.utc).timestamp()
         metadata = self._collect_metadata(step)
