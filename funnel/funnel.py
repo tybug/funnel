@@ -240,13 +240,18 @@ class Script:
     # finished. use central _meta dir for this
     depends_on = []
 
-    def __init__(self, funnel):
+    def __init__(self, funnel: "Funnel"):
         self.funnel = funnel
         self.argparser = ArgumentParser()
         self.add_arguments(self.argparser)
+        self.output_path = funnel.storage_dir / "scripts" / self.name
 
     def add_arguments(self, parser):
         pass
+
+    def _run(self, **kwargs):
+        shutil.rmtree(self.output_path, ignore_errors=True)
+        return self.run(**kwargs)
 
     @abstractmethod
     def run(self, **kwargs):
@@ -412,7 +417,7 @@ class Funnel:
         if args.script is not None:
             script = self._find_script(args.script)
             args = script.argparser.parse_args(remaining_args)
-            script.run(**args.__dict__)
+            script._run(**args.__dict__)
             return
 
         # unknown args are further parsed by --script, but otherwise disallowed.
