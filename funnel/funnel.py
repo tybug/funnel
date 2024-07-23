@@ -41,6 +41,24 @@ COPY = object()
 # files right now. 1001 is the default and also the value used on discovery.
 SLURM_MAX_ITEMS = 1000
 
+# maximum number of jobs a user can have submitted/queued/running/etc simultaneously.
+# I've experimentally determined MaxSubmitJobPerUserLimit to be 1500 via
+# the following script and bisecting the value of n which lets two batches be submitted.
+# inflection point is at n=749/750, so 2n = 1500.
+#
+#   #!/bin/bash
+#   #SBATCH --partition=express
+#   #SBATCH --nodes 1
+#   #SBATCH --ntasks 1
+#   #SBATCH --array=0-1000
+#
+#   sleep 5
+#
+# This limit is equivalent to MaxSubmitPU in sacctmgr show qos | grep normal,
+# even though the rest of the partitions don't have a MaxSubmitPU set. possibly
+# partitions take default settings from "normal" if not set. unsure.
+SLURM_MAX_SUBMITTED_JOBS = 1500
+
 # some partitions have a different max time than the default. we'll always use
 # the max, unless the Step specifies otherwise.
 SLURM_PARTITION_MAX_TIMES = {
@@ -559,6 +577,7 @@ class Funnel:
                     time_limit = step.time_limit
                 items_per_node = step.items_per_node
                 max_items_per_batch = SLURM_MAX_ITEMS * items_per_node
+                processes = []
                 while remaining:
                     batch = remaining[:max_items_per_batch]
                     remaining = remaining[max_items_per_batch:]
@@ -611,20 +630,32 @@ class Funnel:
                         """,
                         suffix=".sh",
                     )
+
+                    while True:
+                        num_submitted_jobs = subprocess.check_output(
+                            ["squeue", "--me", "--noheader", "--array"], text=True
+                        )
+                        num_submitted_jobs = len(num_submitted_jobs.split("\n"))
+                        print("eeee", len(batch), num_submitted_jobs, SLURM_MAX_SUBMITTED_JOBS, SLURM_MAX_SUBMITTED_JOBS - 5)
+                        # avoid launching the next batch until doing so would keep us under
+                        # SLURM_MAX_SUBMITTED_JOBS, plus some small leeway.
+                        if (
+                            len(batch) + num_submitted_jobs
+                            < SLURM_MAX_SUBMITTED_JOBS - 5
+                        ):
+                            break
+                        time.sleep(60)
+
                     process = subprocess.Popen(
                         ["sbatch", "--wait", array_job_file.name]
                     )
-                    # we'd like to launch all processes and then .wait() for
-                    # them all after, giving long-running tasks in each batch
-                    # a chance to run in parallel. But slurm really doesn't like
-                    # this, even if we limit with %10:
-                    # [devoe.l@login-00] /etc/slurm λ sbatch /tmp/tmpw8sdl3qc.sh
-                    # sbatch: error: QOSMaxSubmitJobPerUserLimit
-                    # sbatch: error: Batch job submission failed: Job violates accounting/QOS policy (job submit limit, user's size and/or time limits)
+                    processes.append(process)
+
+                for process in processes:
                     process.wait()
 
-                # even though we told it to wait until all tasks finished with
-                # --wait, let's give it a bit longer to clean up, just in case.
+                # even though we waited for all processes, let's give it a tiny
+                # bit longer to clean up, just in case.
                 time.sleep(1)
             else:
                 # no discovery batch mode. execute normally (sequential execution).
