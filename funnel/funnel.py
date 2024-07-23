@@ -635,8 +635,7 @@ class Funnel:
                         num_submitted_jobs = subprocess.check_output(
                             ["squeue", "--me", "--noheader", "--array"], text=True
                         )
-                        num_submitted_jobs = len(num_submitted_jobs.split("\n"))
-                        print("eeee", len(batch), num_submitted_jobs, SLURM_MAX_SUBMITTED_JOBS, SLURM_MAX_SUBMITTED_JOBS - 5)
+                        num_submitted_jobs = len(num_submitted_jobs.split("\n")) - 1
                         # avoid launching the next batch until doing so would keep us under
                         # SLURM_MAX_SUBMITTED_JOBS, plus some small leeway.
                         if (
