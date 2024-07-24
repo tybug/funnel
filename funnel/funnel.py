@@ -654,6 +654,9 @@ class Funnel:
                         ["sbatch", "--wait", array_job_file.name]
                     )
                     processes.append(process)
+                    # before we try submitting our next sbatch, wait for it to register
+                    # with squeue, else we may try submitting over QOSMaxSubmitJobPerUserLimit.
+                    time.sleep(10)
 
                 for process in processes:
                     process.wait()
