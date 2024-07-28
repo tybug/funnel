@@ -329,7 +329,7 @@ class Funnel:
         )
 
     def create_temporary_script(self, script_text, *, suffix) -> NamedTemporaryFile:
-        script_text = textwrap.dedent(script_text).strip()
+        script_text = textwrap.dedent(script_text).strip() + "\n"
         with NamedTemporaryFile(
             mode="w+", suffix=suffix, delete=False, dir=self.meta_scripts_dir
         ) as f:
