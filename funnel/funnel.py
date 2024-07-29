@@ -19,7 +19,7 @@ import sys
 import inspect
 
 from funnel.utils import item_ids_in_dir
-from funnel.utils import dumps
+from funnel.utils import dumps, TrackedClasses, TrackSubclassesMeta
 
 
 class Reject(Exception):
@@ -76,10 +76,11 @@ class Run:
     items: List[Any]
 
 
-class Step:
+class Step(metaclass=TrackSubclassesMeta):
     ## required config options
     name = None
     output = None
+    parent = None
 
     ## other config options
     items_per_node = 1
@@ -94,6 +95,8 @@ class Step:
     cpus_per_task = 1
     # memory per task in mb
     memory = None
+
+    _tracked_classes = TrackedClasses(ignore_classes=["InputStep", "FilterStep"])
 
     def __init__(self, storage_dir, *, parent):
         # step-specific metadata. steps can put anything they want here, e.g.
@@ -230,7 +233,7 @@ class FilterStep(Step):
         """
 
 
-class Script:
+class Script(metaclass=TrackSubclassesMeta):
     # required config options
     name = None
 
@@ -239,6 +242,8 @@ class Script:
     # assert that these steps have run. need a way to check/update which steps have
     # finished. use central _meta dir for this
     depends_on = []
+
+    _tracked_classes = TrackedClasses()
 
     def __init__(self, funnel: "Funnel"):
         self.funnel = funnel
@@ -261,16 +266,6 @@ class Script:
 def _check_step_class(StepClass):
     assert StepClass.name is not None, f"must set a name for {StepClass}"
     assert StepClass.output is not None, f"must set an output for {StepClass}"
-
-
-# for ergonomic return chaining
-class StepAdder:
-    def __init__(self, funnel, step):
-        self.funnel = funnel
-        self.step = step
-
-    def add_child_step(self, StepClass):
-        return self.funnel.add_step(StepClass, parent=self.step)
 
 
 class Funnel:
@@ -328,6 +323,15 @@ class Funnel:
             "--batch-iteration", dest="batch_iteration", type=int
         )
 
+        for StepClass in Step._tracked_classes:
+            if issubclass(StepClass, InputStep):
+                self.initial_step(StepClass)
+            else:
+                self.add_step(StepClass, parent=self._find_step(StepClass.parent))
+
+        for ScriptClass in Script._tracked_classes:
+            self.add_script(ScriptClass)
+
     def create_temporary_script(self, script_text, *, suffix) -> NamedTemporaryFile:
         script_text = textwrap.dedent(script_text).strip() + "\n"
         with NamedTemporaryFile(
@@ -359,7 +363,6 @@ class Funnel:
         assert isinstance(step, InputStep)
 
         self._initial_step = step
-        return StepAdder(self, step)
 
     def add_step(self, StepClass, *, parent):
         _check_step_class(StepClass)
@@ -370,8 +373,6 @@ class Funnel:
 
         self._parent_step[step] = parent
         self._step_children[parent].append(step)
-
-        return StepAdder(self, step)
 
     def add_script(self, ScriptClass):
         script = ScriptClass(self)
@@ -387,6 +388,8 @@ class Funnel:
         return children
 
     def all_steps(self):
+        if self._initial_step is None:
+            return []
         return self.children_of(self._initial_step, include_parent=True)
 
     def run(self, argv, *, discovery_batch=False):
