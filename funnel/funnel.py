@@ -133,6 +133,20 @@ class Step(metaclass=TrackSubclassesMeta):
         with open(self.metadata_dir / f"{i}", "w+") as f:
             f.write(dumps(metadata) + "\n")
 
+    def pre_filter(self, item, i) -> bool:
+        """
+        Called by the master process to determine if this item should be run.
+        This avoids launching an expensive slurm node (say, with 20 cores) only
+        to immediately reject it.
+
+        This is applied at the topmost level, before any repeat step iterations
+        or batch processing.
+
+        Returning False here is roughly equivalent to raising Reject from
+        process_item.
+        """
+        return True
+
     def process_item(self, item, i, *, iteration):
         # clear on metadata each item, so any add_metadata is fresh
         self.metadata.clear()
@@ -562,6 +576,10 @@ class Funnel:
         else:
             parent_step = self._parent_step[step]
             item_ids = item_ids_in_dir(parent_step.storage_dir)
+            # TODO log filtered out steps from pre_filter in metadata.
+            # it should be roughly equivalent to raising Reject, which writes some metadata
+            # and status: rejected. we have no visibility over pre_filtered items currently.
+            item_ids = [i for i in item_ids if step.pre_filter(self._input(step, i), i)]
             item_ids = sorted(item_ids)
             if discovery_batch:
                 # launch the array job for processing this step.
