@@ -263,13 +263,14 @@ class Script(metaclass=TrackSubclassesMeta):
         self.funnel = funnel
         self.argparser = ArgumentParser()
         self.add_arguments(self.argparser)
-        self.output_path = funnel.storage_dir / "scripts" / self.name
+        self.output_path: Path = funnel.storage_dir / "scripts" / self.name
 
     def add_arguments(self, parser):
         pass
 
     def _run(self, **kwargs):
         shutil.rmtree(self.output_path, ignore_errors=True)
+        self.output_path.mkdir()
         return self.run(**kwargs)
 
     @abstractmethod
