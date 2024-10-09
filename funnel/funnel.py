@@ -121,8 +121,11 @@ class Step(metaclass=TrackSubclassesMeta):
     def item(self, item, i):
         pass
 
-    def output_path(self, i) -> Path:
-        return self.storage_dir / f"{i}"
+    def output_path(self, i, *, create=False) -> Path:
+        p = self.storage_dir / str(i)
+        if create:
+            p.mkdir()
+        return p
 
     def add_metadata(self, metadata):
         self.metadata = {**metadata, **self.metadata}
