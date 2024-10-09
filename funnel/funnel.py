@@ -273,7 +273,7 @@ class Script(metaclass=TrackSubclassesMeta):
 
     def _run(self, **kwargs):
         shutil.rmtree(self.output_path, ignore_errors=True)
-        self.output_path.mkdir()
+        self.output_path.mkdir(parents=True)
         return self.run(**kwargs)
 
     @abstractmethod
