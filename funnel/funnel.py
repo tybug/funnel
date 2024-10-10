@@ -10,16 +10,25 @@ import textwrap
 from tempfile import NamedTemporaryFile
 import subprocess
 import time
-from typing import List
+from typing import TypeAlias
 from argparse import ArgumentParser
 import traceback
 from collections import defaultdict
 import math
 import sys
 import inspect
+from contextlib import redirect_stdout, redirect_stderr
 
-from funnel.utils import item_ids_in_dir
-from funnel.utils import dumps, TrackedClasses, TrackSubclassesMeta
+from funnel.utils import item_ids_in_dir, dumps, TrackedClasses, TrackSubclassesMeta
+
+StepT: TypeAlias = type["Step"]
+ScriptT: TypeAlias = type["Script"]
+_current_funnel: "Funnel | None" = None
+
+
+def _set_current_funnel(funnel: "Funnel"):
+    global _current_funnel
+    _current_funnel = funnel
 
 
 class Reject(Exception):
@@ -35,6 +44,8 @@ class Reject(Exception):
 # previous step. Used both for convenience and to reduce disk storage (we symlink
 # to the previous item instead of copying).
 COPY = object()
+
+# TODO for parsing this dynamically: scontrol show config | grep
 
 # technically 1001, but let's not push our luck.
 # This is also configurable in slurm, but I don't feel like parsing slurm conf
@@ -73,14 +84,14 @@ SLURM_PARTITION_MAX_TIMES = {
 class Run:
     started_at: datetime
     ended_at: datetime
-    items: List[Any]
+    items: list[Any]
 
 
 class Step(metaclass=TrackSubclassesMeta):
     ## required config options
-    name = None
-    output = None
-    parent = None
+    name: str = None
+    output: str = None
+    parent: str = None
 
     ## other config options
     items_per_node = 1
@@ -96,15 +107,10 @@ class Step(metaclass=TrackSubclassesMeta):
     # memory per task in mb
     memory = None
 
+    # step-specific metadata. steps can put anything they want here, e.g.
+    # stacktraces for items that were rejected as a result of errors.
+    _metadata = {}
     _tracked_classes = TrackedClasses(ignore_classes=["InputStep", "FilterStep"])
-
-    def __init__(self, storage_dir, *, parent):
-        # step-specific metadata. steps can put anything they want here, e.g.
-        # stacktraces for items that were rejected as a result of errors.
-        self.metadata = {}
-        self.storage_dir = storage_dir / self.name
-        self.metadata_dir = self.storage_dir / "_processing_results"
-        self.parent = parent
 
     def __str__(self):
         return self.name
@@ -121,21 +127,6 @@ class Step(metaclass=TrackSubclassesMeta):
     def item(self, item, i):
         pass
 
-    def output_path(self, i, *, create=False) -> Path:
-        p = self.storage_dir / str(i)
-        if create:
-            p.mkdir()
-        return p
-
-    def add_metadata(self, metadata):
-        self.metadata = {**metadata, **self.metadata}
-
-    def _write_metadata(self, metadata, i):
-        metadata = {"metadata": self.metadata, **metadata}
-        self.metadata_dir.mkdir(exist_ok=True)
-        with open(self.metadata_dir / f"{i}", "w+") as f:
-            f.write(dumps(metadata) + "\n")
-
     def pre_filter(self, item, i) -> bool:
         """
         Called by the master process to determine if this item should be run.
@@ -150,13 +141,68 @@ class Step(metaclass=TrackSubclassesMeta):
         """
         return True
 
-    def process_item(self, item, i, *, iteration):
-        # clear on metadata each item, so any add_metadata is fresh
-        self.metadata.clear()
+    @classmethod
+    def log(cls, message):
+        print(f"[{cls.name}] {message}")
+
+    @classmethod
+    def storage_dir(cls) -> Path:
+        assert (
+            _current_funnel is not None
+        ), "can only access storage_dir in the context of Funnel.run"
+        return _current_funnel.storage_dir / cls.name
+
+    @classmethod
+    def metadata_dir(self):
+        p = self.storage_dir() / "_processing_results"
+        p.mkdir(exist_ok=True)
+        return p
+
+    @classmethod
+    def output_path(cls, i, *, at: str = "data") -> Path:
+        # data is one of "top", "item", or "data".
+        # If cls.output is not "json", then "item" and "data" are equivalent.
+        # 0/                 <-- top
+        #   item/            <-- item
+        #      data.json     <-- data
+        #   _out.log
+        p = cls.storage_dir() / str(i)
+
+        ats = ["top", "item", "data"]
+        if at not in ats:
+            raise ValueError(f"invalid {at=}, expected one of {ats}")
+        for at_ in ats:
+            if at_ == "item":
+                p = p / "item"
+            if at_ == "data" and _current_funnel._output_type(cls) == "json":
+                p = p / "data.json"
+
+            if at == at_:
+                break
+
+        return p
+
+    @classmethod
+    def add_metadata(cls, metadata):
+        cls._metadata = {**cls._metadata, **metadata}
+
+    @classmethod
+    def _write_metadata(cls, metadata, i):
+        metadata = {"metadata": cls._metadata, **metadata}
+        with open(cls.metadata_dir() / f"{i}", "w+") as f:
+            f.write(dumps(metadata) + "\n")
+
+    @classmethod
+    def process_item(cls, item, i, *, iteration):
+        # TODO support iteration properly when writing metadata (prefix iteration in filename?)
+        # and similarly in _collect_metadata
+        # clear metadata on each item, so any add_metadata is fresh
+        cls._metadata.clear()
+        cls.output_path(i, at="item").mkdir(parents=True, exist_ok=True)
 
         # only pass iteration if self.item requests it with a kw-only param
         kwargs = {}
-        for param in inspect.signature(self.item).parameters.values():
+        for param in inspect.signature(cls.item).parameters.values():
             if (
                 param.kind is inspect.Parameter.KEYWORD_ONLY
                 and param.name == "iteration"
@@ -164,65 +210,66 @@ class Step(metaclass=TrackSubclassesMeta):
                 kwargs["iteration"] = iteration
 
         try:
-            output = self.item(item, i, **kwargs)
+            instance = cls()
+            with (
+                open(cls.output_path(i, at="top") / "_out.log", "w+") as f,
+                redirect_stdout(f),
+                redirect_stderr(f),
+            ):
+                output = instance.item(item, i, **kwargs)
         except Reject as e:
             # if the step wrote to the output directory here before rejecting it,
             # clean it up so future steps don't think it was valid.
-            p = self.output_path(i)
-            if p.is_file():
-                p.unlink()
-            if p.is_dir():
-                shutil.rmtree(p)
-
+            p = cls.output_path(i, at="item")
+            shutil.rmtree(p)
             metadata = {"status": "rejected", "rejected_reason": e.reason}
-            self._write_metadata(metadata, i)
+            cls._write_metadata(metadata, i)
             return
-        except Exception:
+        except Exception as e:
             metadata = {
                 "status": "error",
                 "error_message": traceback.format_exc(),
             }
-            self._write_metadata(metadata, i)
+            cls._write_metadata(metadata, i)
             return
 
-        output_path = self.output_path(i)
+        output_path = cls.output_path(i, at="item")
         if output is COPY:
-            assert self.parent is not None
-            previous_output_path = self.parent.output_path(i)
+            assert cls.parent is not None
+            previous_output_path = _current_funnel._parent_step[cls].output_path(
+                i, at="item"
+            )
+            shutil.rmtree(output_path)
             output_path.symlink_to(previous_output_path.resolve())
-        elif self.output == "json":
+        elif cls.output == "json":
             if output is None:
                 raise Exception(
                     'Step must return a value from item() for output == "json"'
                 )
 
-            with open(output_path, "w+") as f:
+            with open(output_path / "data.json", "w+") as f:
                 f.write(dumps(output) + "\n")
         # for output == "path" which doesn't return COPY, the step is responsible
         # for writing to output_path itself. TODO we could check that something
         # has in fact been written to output_path in this case
 
         metadata = {"status": "valid"}
-        self._write_metadata(metadata, i)
-
-    def log(self, message):
-        print(f"[{self.name}] {message}")
+        cls._write_metadata(metadata, i)
 
 
 class InputStep(Step):
-    def __init__(self, storage_dir):
-        super().__init__(storage_dir, parent=None)
-        # for caching purposes
-        self._items = None
+    _items = None
 
     @abstractmethod
     def items(self):
         pass
 
     # weird song and dance to get the correct caching behavior for items()
-    def get_items(self):
-        self._items = self.items()
-        return self._items
+    @classmethod
+    def get_items(cls):
+        instance = cls()
+        cls._items = instance.items()
+        return cls._items
 
     def item(self, item, i):
         if self._items is None:
@@ -252,7 +299,7 @@ class FilterStep(Step):
 
 class Script(metaclass=TrackSubclassesMeta):
     # required config options
-    name = None
+    name: str = None
 
     # optional config options
     # TODO enforce depends_on by running those steps if not already ran? or just
@@ -289,7 +336,7 @@ def _check_step_class(StepClass):
 class Funnel:
     metadata_filename = "_statistics.json"
 
-    def __init__(self, storage_dir):
+    def __init__(self, storage_dir: str) -> None:
         self.storage_dir = Path(storage_dir)
         self.meta_dir = self.storage_dir / "_meta"
         self.meta_scripts_dir = self.meta_dir / "scripts"
@@ -306,13 +353,13 @@ class Funnel:
         ]:
             p.mkdir(parents=True, exist_ok=True)
 
-        self.steps = []
-        self.scripts = []
-        self._initial_step = None
+        self.steps: list[StepT] = []
+        self.scripts: list[ScriptT] = []
+        self._initial_step: "StepT | None" = None
         # mapping of step to their parent
-        self._parent_step = {}
+        self._parent_step: dict[StepT, StepT] = {}
         # mapping of step to their children
-        self._step_children = defaultdict(list)
+        self._step_children: dict[StepT, list[StepT]] = defaultdict(list)
 
         self.argparser = ArgumentParser()
         self.argparser.add_argument(
@@ -359,7 +406,7 @@ class Funnel:
             f.write(script_text)
         return f
 
-    def _find_step(self, step_name) -> Step:
+    def _find_step(self, step_name: str) -> StepT:
         for step in self.all_steps():
             if step.name == step_name:
                 return step
@@ -367,7 +414,7 @@ class Funnel:
             f"could not find step {step_name} (options: {self.all_steps()})"
         )
 
-    def _find_script(self, script_name) -> Script:
+    def _find_script(self, script_name: str) -> ScriptT:
         for script in self.scripts:
             if script.name == script_name:
                 return script
@@ -375,19 +422,15 @@ class Funnel:
             f"could not find script {script_name} (options: {[script.name for script in self.scripts]})"
         )
 
-    def initial_step(self, StepClass):
-        _check_step_class(StepClass)
-        step = StepClass(self.storage_dir)
-        assert isinstance(step, InputStep)
-
+    def initial_step(self, step: StepT) -> None:
+        _check_step_class(step)
+        assert issubclass(step, InputStep)
         self._initial_step = step
 
-    def add_step(self, StepClass, *, parent):
-        _check_step_class(StepClass)
-
-        step = StepClass(self.storage_dir, parent=parent)
+    def add_step(self, step: StepT, *, parent: StepT) -> None:
+        _check_step_class(step)
         # a step is an input step iff it is the first step in the funnel.
-        assert not isinstance(step, InputStep)
+        assert not issubclass(step, InputStep)
 
         self._parent_step[step] = parent
         self._step_children[parent].append(step)
@@ -396,7 +439,7 @@ class Funnel:
         script = ScriptClass(self)
         self.scripts.append(script)
 
-    def children_of(self, step, *, include_parent=False):
+    def children_of(self, step: StepT, *, include_parent=False) -> list[StepT]:
         children = []
         for child in self._step_children[step]:
             children.append(child)
@@ -405,7 +448,7 @@ class Funnel:
             children = [step] + children
         return children
 
-    def all_steps(self):
+    def all_steps(self) -> list[StepT]:
         if self._initial_step is None:
             return []
         return self.children_of(self._initial_step, include_parent=True)
@@ -430,6 +473,7 @@ class Funnel:
 
             Can be overriden with the --discovery-batch command line argument.
         """
+        _set_current_funnel(self)
         args, remaining_args = self.argparser.parse_known_args(argv[1:])
 
         if args.discovery_batch is not None:
@@ -457,9 +501,10 @@ class Funnel:
         elif args.to_step is not None:
             step = self._find_step(args.to_step)
             steps = [step]
-            while step.parent is not None:
-                steps.insert(0, step.parent)
-                step = step.parent
+            while (parent_name := step.parent) is not None:
+                parent = self._find_step(parent_name)
+                steps.insert(0, parent)
+                step = parent
         elif args.from_step is not None:
             # all steps after (and including) this step.
             step = self._find_step(args.from_step)
@@ -482,42 +527,29 @@ class Funnel:
             else:
                 self._run_step(step, argv, discovery_batch=discovery_batch)
 
-    def run_from_step(self, /, StepClass):
-        """
-        Runs the funnel from (and including) the given step, but not any steps
-        before.
-        """
-        step = self._find_step(StepClass.name)
-        i = self.steps.index(step)
-        for step in self.steps[i:]:
-            self._run_step(step)
+    def _input_type(self, step: StepT):
+        # input steps don't have an input type
+        assert not issubclass(step, InputStep)
+        # a step's input is equal to its parent step's output
+        return self._output_type(self._parent_step[step])
 
-    def run_single_step(self, /, StepClass):
-        step = self._find_step(StepClass.name)
-        self._run_step(step)
-
-    def _input_type(self, step):
-        parent_step = self._parent_step[step]
-        # a step's input is equal to its parent step's output. If that parent
-        # has an output of COPY, that means its output is the same as *its*
-        # parent step (the current step's grandparent).
-        input_type = parent_step.output
-        if input_type == "copy":
-            return self._input_type(parent_step)
-        return input_type
+    def _output_type(self, step: StepT):
+        # a step's output is equal to its defined output type, or its parent's
+        # output type if set to COPY.
+        output_type = step.output
+        if output_type == "copy":
+            return self._output_type(self._parent_step[step])
+        return output_type
 
     def _input(self, step, i):
-        parent_step = self._parent_step[step]
-        p = parent_step.output_path(i)
+        p = self._parent_step[step].output_path(i)
         input_type = self._input_type(step)
         if input_type == "json":
-            with open(p) as f:
-                val = f.read()
-                return json.loads(val)
+            return json.loads(p.read_text())
         if input_type == "path":
             return p
 
-    def _collect_metadata(self, step: Step):
+    def _collect_metadata(self, step: StepT):
         metadata = {
             "count_valid": 0,
             "count_rejected": 0,
@@ -526,14 +558,13 @@ class Funnel:
             "errors": {},
             "item_metadata": {},
         }
-        for p in step.metadata_dir.glob("*"):
+        for p in step.metadata_dir().glob("*"):
             # ignore .DS_Store and other garbage
             if not re.match(r"\d+", p.name):
                 continue
-            i = int(p.name)
-            with open(p) as f:
-                item_metadata = json.loads(f.read())
 
+            i = int(p.name)
+            item_metadata = json.loads(p.read_text())
             if item_metadata["status"] == "rejected":
                 metadata["count_rejected"] += 1
                 metadata["rejected"][i] = item_metadata["rejected_reason"]
@@ -547,7 +578,7 @@ class Funnel:
 
         return metadata
 
-    def _run_item(self, step: Step, i, *, for_iteration=None):
+    def _run_item(self, step: StepT, i, *, for_iteration=None):
         val = self._input(step, i)
         iterations = (
             range(step.iterations) if for_iteration is None else [for_iteration]
@@ -555,20 +586,19 @@ class Funnel:
         for iteration in iterations:
             step.process_item(val, i, iteration=iteration)
 
-    def _run_step(self, step: Step, argv: List[str], *, discovery_batch=False):
+    def _run_step(self, step: StepT, argv: list[str], *, discovery_batch=False):
         print(f"running step {step.name}")
         # recreate the directory for this step
-        if step.storage_dir.exists():
-            shutil.rmtree(step.storage_dir)
-        step.storage_dir.mkdir()
+        if step.storage_dir().exists():
+            shutil.rmtree(step.storage_dir())
+        step.storage_dir().mkdir()
 
         started_at = datetime.now(timezone.utc).timestamp()
-
         # InputStep has to be handled a bit specially. This is ugly and should
         # be refactored so we can unify it with standard Steps. The issue is
         # it operates at a batch level of all items, instead of a per-item basis,
         # because there is no "previous item" to operate on.
-        if isinstance(step, InputStep):
+        if issubclass(step, InputStep):
             # load all the items...
             items = step.get_items()
             # for now, multi-iteration input steps are nonsensical.
@@ -579,11 +609,14 @@ class Funnel:
                 step.process_item(item, i, iteration=0)
         else:
             parent_step = self._parent_step[step]
-            item_ids = item_ids_in_dir(parent_step.storage_dir)
+            item_ids = item_ids_in_dir(parent_step.storage_dir())
             # TODO log filtered out steps from pre_filter in metadata.
             # it should be roughly equivalent to raising Reject, which writes some metadata
             # and status: rejected. we have no visibility over pre_filtered items currently.
-            item_ids = [i for i in item_ids if step.pre_filter(self._input(step, i), i)]
+            instance = step()
+            item_ids = [
+                i for i in item_ids if instance.pre_filter(self._input(step, i), i)
+            ]
             item_ids = sorted(item_ids)
             if discovery_batch:
                 # launch the array job for processing this step.
@@ -697,7 +730,7 @@ class Funnel:
         ended_at = datetime.now(timezone.utc).timestamp()
         metadata = self._collect_metadata(step)
         metadata = {"started_at": started_at, "ended_at": ended_at, **metadata}
-        with open(step.storage_dir / self.metadata_filename, "w+") as f:
+        with open(step.storage_dir() / self.metadata_filename, "w+") as f:
             f.write(dumps(metadata) + "\n")
 
         # now that we're done collecting metadata, we can remove that directory.
@@ -707,5 +740,5 @@ class Funnel:
         #
         # it's possible the dir may not exist if the step had 0 input items
         # (no items processed).
-        if step.metadata_dir.exists():
-            shutil.rmtree(step.metadata_dir)
+        if step.metadata_dir().exists():
+            shutil.rmtree(step.metadata_dir())
