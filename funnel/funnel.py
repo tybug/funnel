@@ -621,10 +621,15 @@ class Funnel:
             # TODO log filtered out steps from pre_filter in metadata.
             # it should be roughly equivalent to raising Reject, which writes some metadata
             # and status: rejected. we have no visibility over pre_filtered items currently.
-            instance = step()
-            item_ids = [
-                i for i in item_ids if instance.pre_filter(self._input(step, i), i)
-            ]
+
+            # self._input(step, i) can be expensive in io if we have to read json
+            # files, so only perform the prefilter if the step actually *has*
+            # a prefilter, because the default Step.pre_filter allows everything.
+            if step.pre_filter != Step.pre_filter:
+                instance = step()
+                item_ids = [
+                    i for i in item_ids if instance.pre_filter(self._input(step, i), i)
+                ]
             item_ids = sorted(item_ids)
             if discovery_batch:
                 # launch the array job for processing this step.
