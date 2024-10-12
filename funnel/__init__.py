@@ -1,4 +1,4 @@
-from funnel.funnel import Funnel, Step, InputStep, FilterStep, Reject, COPY, Script
+from funnel.funnel import Funnel, Step, InputStep, FilterStep, Reject, COPY, Script, log
 from funnel import utils
 
 __all__ = [
@@ -10,4 +10,5 @@ __all__ = [
     "COPY",
     "Script",
     "utils",
+    "log",
 ]

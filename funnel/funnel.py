@@ -18,12 +18,56 @@ import math
 import sys
 import inspect
 from contextlib import redirect_stdout, redirect_stderr
+import logging
+from logging import StreamHandler, FileHandler
+from contextlib import contextmanager
 
 from funnel.utils import item_ids_in_dir, dumps, TrackedClasses, TrackSubclassesMeta
 
 StepT: TypeAlias = type["Step"]
 ScriptT: TypeAlias = type["Script"]
 _current_funnel: "Funnel | None" = None
+
+
+class Logger(logging.Logger):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.formatter = logging.Formatter(
+            fmt="[%(asctime)s][%(levelname)s][%(filename)s:%(funcName)s:%(lineno)d] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+        self.use_stdout_handler()
+        self.log_to_path = None
+
+    def use_file_handler(self, path):
+        handler = FileHandler(path)
+        handler.setFormatter(self.formatter)
+        self.handlers = [handler]
+
+    def use_stdout_handler(self):
+        stdout_handler = StreamHandler(sys.stdout)
+        stdout_handler.setFormatter(self.formatter)
+        self.handlers = [stdout_handler]
+
+    def _log(self, *args, **kwargs):
+        if self.log_to_path is None:
+            self.use_stdout_handler()
+        else:
+            self.use_file_handler(self.log_to_path)
+        super()._log(*args, **kwargs)
+
+
+log = Logger("funnel")
+log.setLevel(logging.INFO)
+
+
+@contextmanager
+def log_to_path(p):
+    log.log_to_path = p
+    try:
+        yield
+    finally:
+        log.log_to_path = None
 
 
 def _set_current_funnel(funnel: "Funnel"):
@@ -143,7 +187,7 @@ class Step(metaclass=TrackSubclassesMeta):
 
     @classmethod
     def log(cls, message):
-        print(f"[{cls.name}] {message}")
+        log.info(f"[{cls.name}] {message}")
 
     @classmethod
     def storage_dir(cls) -> Path:
@@ -209,12 +253,14 @@ class Step(metaclass=TrackSubclassesMeta):
             ):
                 kwargs["iteration"] = iteration
 
+        instance = cls()
+        log_path = cls.output_path(i, at="top") / "_out.log"
         try:
-            instance = cls()
             with (
-                open(cls.output_path(i, at="top") / "_out.log", "w+") as f,
+                open(log_path, "a+") as f,
                 redirect_stdout(f),
                 redirect_stderr(f),
+                log_to_path(log_path),
             ):
                 output = instance.item(item, i, **kwargs)
         except Reject as e:
@@ -238,6 +284,8 @@ class Step(metaclass=TrackSubclassesMeta):
                 "error_message": traceback.format_exc(),
             }
             cls._write_metadata(metadata, i)
+            with log_to_path(log_path):
+                log.error(exc_info=e)
             return
 
         output_path = cls.output_path(i, at="item")
@@ -409,7 +457,7 @@ class Funnel:
         with NamedTemporaryFile(
             mode="w+", suffix=suffix, delete=False, dir=self.meta_scripts_dir
         ) as f:
-            print(f"creating temporary script at {f.name}")
+            log.info(f"creating temporary script at {f.name}")
             f.write(script_text)
         return f
 
@@ -594,10 +642,10 @@ class Funnel:
             step.process_item(val, i, iteration=iteration)
 
     def _run_step(self, step: StepT, argv: list[str], *, discovery_batch=False):
-        print(f"running step {step.name}")
+        log.info(f"running step {step.name}")
         # recreate the directory for this step
         if step.storage_dir().exists():
-            print(f"removing storage dir {step.storage_dir()}")
+            log.info(f"removing storage dir {step.storage_dir()}")
             shutil.rmtree(step.storage_dir())
         step.storage_dir().mkdir()
 
