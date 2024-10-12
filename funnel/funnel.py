@@ -590,6 +590,7 @@ class Funnel:
         print(f"running step {step.name}")
         # recreate the directory for this step
         if step.storage_dir().exists():
+            print(f"removing storage dir {step.storage_dir()}")
             shutil.rmtree(step.storage_dir())
         step.storage_dir().mkdir()
 
