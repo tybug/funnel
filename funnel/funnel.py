@@ -220,7 +220,14 @@ class Step(metaclass=TrackSubclassesMeta):
         except Reject as e:
             # if the step wrote to the output directory here before rejecting it,
             # clean it up so future steps don't think it was valid.
-            p = cls.output_path(i, at="item")
+            #
+            # We clean up at "top" so the entire directory is removed, because
+            # we currently check the top level of a step to collect all the items.
+            # A consequence of this is the _out.log file is removed for rejected
+            # steps, which is unfortunate for debugging. To fix this we could
+            # remove at "item" (which keeps _out.log) and check the existence of
+            # the "item" instead of the "top" dir to collect items.
+            p = cls.output_path(i, at="top")
             shutil.rmtree(p)
             metadata = {"status": "rejected", "rejected_reason": e.reason}
             cls._write_metadata(metadata, i)
