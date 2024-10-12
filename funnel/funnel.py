@@ -645,7 +645,7 @@ class Funnel:
                 while remaining:
                     batch = remaining[:max_items_per_batch]
                     remaining = remaining[max_items_per_batch:]
-                    array_str = f"0-{math.ceil(len(batch) / items_per_node) - 1}"
+                    count_jobs = math.ceil(len(batch) / items_per_node)
 
                     # use the same python as we were executed with
                     python = sys.executable
@@ -684,7 +684,7 @@ class Funnel:
                         #SBATCH --nodes 1
                         #SBATCH --ntasks 1
                         #SBATCH --cpus-per-task {step.cpus_per_task}
-                        #SBATCH --array={array_str}
+                        #SBATCH --array=0-{count_jobs - 1}"
                         #SBATCH --time={time_limit}
                         {f"#SBATCH --mem={step.memory}" if step.memory is not None else ""}
                         #SBATCH -o {self.meta_output_dir}/%A_%a.txt
@@ -703,7 +703,7 @@ class Funnel:
                         # avoid launching the next batch until doing so would keep us under
                         # SLURM_MAX_SUBMITTED_JOBS, plus some small leeway.
                         if (
-                            len(batch) + num_submitted_jobs
+                            count_jobs + num_submitted_jobs
                             < SLURM_MAX_SUBMITTED_JOBS - 5
                         ):
                             break
