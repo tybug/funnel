@@ -268,7 +268,7 @@ class InputStep(Step):
     @classmethod
     def get_items(cls):
         instance = cls()
-        cls._items = instance.items()
+        cls._items = list(instance.items())
         return cls._items
 
     def item(self, item, i):
