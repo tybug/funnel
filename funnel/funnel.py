@@ -273,8 +273,7 @@ class Step(metaclass=TrackSubclassesMeta):
             # steps, which is unfortunate for debugging. To fix this we could
             # remove at "item" (which keeps _out.log) and check the existence of
             # the "item" instead of the "top" dir to collect items.
-            p = cls.output_path(i, at="top")
-            shutil.rmtree(p)
+            shutil.rmtree(cls.output_path(i, at="top"), ignore_errors=True)
             metadata = {"status": "rejected", "rejected_reason": e.reason}
             cls._write_metadata(metadata, i)
             return
