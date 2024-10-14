@@ -285,7 +285,7 @@ class Step(metaclass=TrackSubclassesMeta):
             }
             cls._write_metadata(metadata, i)
             with log_to_path(log_path):
-                log.error(exc_info=e)
+                log.error("uncaught exception while processing item", exc_info=e)
             return
 
         output_path = cls.output_path(i, at="item")
