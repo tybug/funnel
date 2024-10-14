@@ -83,6 +83,16 @@ class Reject(Exception):
     def __init__(self, reason):
         self.reason = reason
 
+def really_rmtree(path, *, attempts=1):
+    def on_exception(_function, _path, _excinfo):
+        # exponential backoff
+        time.sleep((2 ** attempts) / 3)
+        really_rmtree(path, attempts=attempts + 1)
+
+    if attempts > 10:
+        raise Exception(f"Tried and failed to remove {path} too many times ({attempts} attempts)")
+    shutil.rmtree(path, onexc=on_exception)
+
 
 # return this from Step#item to indicte that the item is unchanged from the
 # previous step. Used both for convenience and to reduce disk storage (we symlink
@@ -274,18 +284,15 @@ class Step(metaclass=TrackSubclassesMeta):
             # remove at "item" (which keeps _out.log) and check the existence of
             # the "item" instead of the "top" dir to collect items.
             p = cls.output_path(i, at="top")
-            # this errors with "cannot remove dir, dir is not empty" on discovery
-            # sometimes and I'm not sure why. the dir ends up empty after this
-            # step completes. possibly our log file writing is messing with
-            # things. I don't think it's a paralellism issue since each item
-            # gets its own job.
+            # shutil.rmtree errors with
+            #   Device or resource busy: '.nfsd9a8a33c094fdcda000492ff'
+            # on discovery sometimes. I think this is because we opened a log
+            # file for writing and then immediately after closing said log file
+            # in the finally block we try to remove its dir, but the NFS file
+            # system hasn't cleaned up its nfs marker yet.
             #
-            # anyway, we'll remove twice, ignoring errors only the first time.
-            # hopefully this is robust enough.
-            shutil.rmtree(p, ignore_errors=True)
-            time.sleep(0.5)
-            shutil.rmtree(p)
-
+            # We'll try aggressively to remove this dir with an exponential backoff.
+            really_rmtree(p)
             metadata = {"status": "rejected", "rejected_reason": e.reason}
             cls._write_metadata(metadata, i)
             return
