@@ -91,7 +91,7 @@ def really_rmtree(path, *, attempts=1):
 
     if attempts > 10:
         raise Exception(f"Tried and failed to remove {path} too many times ({attempts} attempts)")
-    shutil.rmtree(path, onexc=on_exception)
+    shutil.rmtree(path, onerror=on_exception)
 
 
 # return this from Step#item to indicte that the item is unchanged from the
