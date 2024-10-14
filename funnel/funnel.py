@@ -83,14 +83,19 @@ class Reject(Exception):
     def __init__(self, reason):
         self.reason = reason
 
-def really_rmtree(path, *, attempts=1):
+def really_rmtree(path: Path, *, attempts=1):
     def on_exception(_function, _path, _excinfo):
         # exponential backoff
         time.sleep((2 ** attempts) / 3)
+        # try rm -rf, it might work in cases that shutil.rmtree doesn't
+        subprocess.run(["rm", "-rf", path], timeout=2 * 60)
         really_rmtree(path, attempts=attempts + 1)
 
     if attempts > 10:
         raise Exception(f"Tried and failed to remove {path} too many times ({attempts} attempts)")
+    if not path.exists():
+        return
+
     shutil.rmtree(path, onerror=on_exception)
 
 
