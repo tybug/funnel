@@ -273,7 +273,17 @@ class Step(metaclass=TrackSubclassesMeta):
             # steps, which is unfortunate for debugging. To fix this we could
             # remove at "item" (which keeps _out.log) and check the existence of
             # the "item" instead of the "top" dir to collect items.
-            shutil.rmtree(cls.output_path(i, at="top"), ignore_errors=True)
+            p = cls.output_path(i, at="top")
+            # this errors with "cannot remove dir, dir is not empty" on discovery
+            # sometimes and I'm not sure why. the dir ends up empty after this
+            # step completes. possibly our log file writing is messing with
+            # things. I don't think it's a paralellism issue since each item
+            # gets its own job.
+            #
+            # anyway, we'll remove twice, ignoring errors only the first time.
+            # shutil.rmtree(p, ignore_errors=True)
+            time.sleep(0.1)
+            shutil.rmtree(p)
             metadata = {"status": "rejected", "rejected_reason": e.reason}
             cls._write_metadata(metadata, i)
             return
