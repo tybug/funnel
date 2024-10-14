@@ -281,9 +281,11 @@ class Step(metaclass=TrackSubclassesMeta):
             # gets its own job.
             #
             # anyway, we'll remove twice, ignoring errors only the first time.
-            # shutil.rmtree(p, ignore_errors=True)
-            time.sleep(0.1)
+            # hopefully this is robust enough.
+            shutil.rmtree(p, ignore_errors=True)
+            time.sleep(0.5)
             shutil.rmtree(p)
+
             metadata = {"status": "rejected", "rejected_reason": e.reason}
             cls._write_metadata(metadata, i)
             return
