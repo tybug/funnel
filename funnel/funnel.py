@@ -22,7 +22,7 @@ import logging
 from logging import StreamHandler, FileHandler
 from contextlib import contextmanager
 
-from funnel.utils import item_ids_in_dir, dumps, TrackedClasses, TrackSubclassesMeta
+from funnel.utils import dumps, TrackedClasses, TrackSubclassesMeta
 
 StepT: TypeAlias = type["Step"]
 ScriptT: TypeAlias = type["Script"]
@@ -83,16 +83,19 @@ class Reject(Exception):
     def __init__(self, reason):
         self.reason = reason
 
+
 def really_rmtree(path: Path, *, attempts=1):
     def on_exception(_function, _path, _excinfo):
         # exponential backoff
-        time.sleep((2 ** attempts) / 3)
+        time.sleep((2**attempts) / 3)
         # try rm -rf, it might work in cases that shutil.rmtree doesn't
         subprocess.run(["rm", "-rf", path], timeout=2 * 60)
         really_rmtree(path, attempts=attempts + 1)
 
     if attempts > 10:
-        raise Exception(f"Tried and failed to remove {path} too many times ({attempts} attempts)")
+        raise Exception(
+            f"Tried and failed to remove {path} too many times ({attempts} attempts)"
+        )
     if not path.exists():
         return
 
@@ -212,20 +215,30 @@ class Step(metaclass=TrackSubclassesMeta):
         return _current_funnel.storage_dir / cls.name
 
     @classmethod
-    def metadata_dir(self):
-        p = self.storage_dir() / "_processing_results"
-        p.mkdir(exist_ok=True)
-        return p
+    def valid_item_ids(cls):
+        ids = []
+        for p in cls.storage_dir().glob("*"):
+            metadata_p = p / "_metadata.json"
+            if not metadata_p.exists():
+                continue
+
+            metadata = json.loads(metadata_p.read_text())
+            if metadata["status"] != "valid":
+                continue
+
+            ids.append(metadata["item_id"])
+
+        return ids
 
     @classmethod
-    def output_path(cls, i, *, at: str = "data") -> Path:
+    def output_path(cls, item_id, *, at: str = "data") -> Path:
         # data is one of "top", "item", or "data".
         # If cls.output is not "json", then "item" and "data" are equivalent.
         # 0/                 <-- top
         #   item/            <-- item
         #      data.json     <-- data
         #   _out.log
-        p = cls.storage_dir() / str(i)
+        p = cls.storage_dir() / str(item_id)
 
         ats = ["top", "item", "data"]
         if at not in ats:
@@ -246,9 +259,9 @@ class Step(metaclass=TrackSubclassesMeta):
         cls._metadata = {**cls._metadata, **metadata}
 
     @classmethod
-    def _write_metadata(cls, metadata, i):
-        metadata = {"metadata": cls._metadata, **metadata}
-        with open(cls.metadata_dir() / f"{i}", "w+") as f:
+    def _write_metadata(cls, metadata, item_id):
+        metadata = {**metadata, "item_id": int(item_id), "metadata": cls._metadata}
+        with open(cls.output_path(item_id, at="top") / "_metadata.json", "w+") as f:
             f.write(dumps(metadata) + "\n")
 
     @classmethod
@@ -279,25 +292,12 @@ class Step(metaclass=TrackSubclassesMeta):
             ):
                 output = instance.item(item, i, **kwargs)
         except Reject as e:
-            # if the step wrote to the output directory here before rejecting it,
-            # clean it up so future steps don't think it was valid.
-            #
-            # We clean up at "top" so the entire directory is removed, because
-            # we currently check the top level of a step to collect all the items.
-            # A consequence of this is the _out.log file is removed for rejected
-            # steps, which is unfortunate for debugging. To fix this we could
-            # remove at "item" (which keeps _out.log) and check the existence of
-            # the "item" instead of the "top" dir to collect items.
-            p = cls.output_path(i, at="top")
-            # shutil.rmtree errors with
-            #   Device or resource busy: '.nfsd9a8a33c094fdcda000492ff'
-            # on discovery sometimes. I think this is because we opened a log
-            # file for writing and then immediately after closing said log file
-            # in the finally block we try to remove its dir, but the NFS file
-            # system hasn't cleaned up its nfs marker yet.
-            #
-            # We'll try aggressively to remove this dir with an exponential backoff.
-            really_rmtree(p)
+            # clean up the item, leaving only the logs and metadata. this isn't
+            # necessary, but I think cleaning up by default is good practice for
+            # e.g. reducing file count.
+            p = cls.output_path(i, at="item")
+            shutil.rmtree(p, ignore_errors=True)
+
             metadata = {"status": "rejected", "rejected_reason": e.reason}
             cls._write_metadata(metadata, i)
             return
@@ -327,9 +327,6 @@ class Step(metaclass=TrackSubclassesMeta):
 
             with open(output_path / "data.json", "w+") as f:
                 f.write(dumps(output) + "\n")
-        # for output == "path" which doesn't return COPY, the step is responsible
-        # for writing to output_path itself. TODO we could check that something
-        # has in fact been written to output_path in this case
 
         metadata = {"status": "valid"}
         cls._write_metadata(metadata, i)
@@ -636,23 +633,19 @@ class Funnel:
             "errors": {},
             "item_metadata": {},
         }
-        for p in step.metadata_dir().glob("*"):
-            # ignore .DS_Store and other garbage
-            if not re.match(r"\d+", p.name):
-                continue
-
-            i = int(p.name)
-            item_metadata = json.loads(p.read_text())
+        for item_id in step.valid_item_ids():
+            metadata_p = step.output_path(item_id, at="top") / "_metadata.json"
+            item_metadata = json.loads(metadata_p.read_text())
             if item_metadata["status"] == "rejected":
                 metadata["count_rejected"] += 1
-                metadata["rejected"][i] = item_metadata["rejected_reason"]
+                metadata["rejected"][item_id] = item_metadata["rejected_reason"]
             elif item_metadata["status"] == "error":
                 metadata["count_error"] += 1
-                metadata["errors"][i] = item_metadata["error_message"]
+                metadata["errors"][item_id] = item_metadata["error_message"]
             else:
                 metadata["count_valid"] += 1
             if item_metadata["metadata"]:
-                metadata["item_metadata"][i] = item_metadata["metadata"]
+                metadata["item_metadata"][item_id] = item_metadata["metadata"]
 
         return metadata
 
@@ -688,7 +681,7 @@ class Funnel:
                 step.process_item(item, i, iteration=0)
         else:
             parent_step = self._parent_step[step]
-            item_ids = item_ids_in_dir(parent_step.storage_dir())
+            item_ids = parent_step.valid_item_ids()
             # TODO log filtered out steps from pre_filter in metadata.
             # it should be roughly equivalent to raising Reject, which writes some metadata
             # and status: rejected. we have no visibility over pre_filtered items currently.
@@ -816,13 +809,3 @@ class Funnel:
         metadata = {"started_at": started_at, "ended_at": ended_at, **metadata}
         with open(step.storage_dir() / self.metadata_filename, "w+") as f:
             f.write(dumps(metadata) + "\n")
-
-        # now that we're done collecting metadata, we can remove that directory.
-        # this avoids confusing when looking at the data; the intermediate step
-        # is only necessary to accomodate the distributed nature of discovery.
-        # this line can be commented out if needed for debugging.
-        #
-        # it's possible the dir may not exist if the step had 0 input items
-        # (no items processed).
-        if step.metadata_dir().exists():
-            shutil.rmtree(step.metadata_dir())
