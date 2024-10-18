@@ -5,7 +5,6 @@ from typing import Any
 from datetime import datetime, timezone
 import json
 import shutil
-import re
 import textwrap
 from tempfile import NamedTemporaryFile
 import subprocess
@@ -228,7 +227,7 @@ class Step(metaclass=TrackSubclassesMeta):
 
             ids.append(metadata["item_id"])
 
-        return ids
+        return sorted(ids)
 
     @classmethod
     def output_path(cls, item_id, *, at: str = "data") -> Path:
