@@ -202,6 +202,14 @@ class Step(metaclass=TrackSubclassesMeta):
         """
         return True
 
+    @staticmethod
+    def post_run_hook() -> None:
+        """
+        Called by the master process immediately after this step finishes
+        running.
+        """
+        return
+
     @classmethod
     def log(cls, message):
         log.info(f"[{cls.name}] {message}")
@@ -808,3 +816,5 @@ class Funnel:
         metadata = {"started_at": started_at, "ended_at": ended_at, **metadata}
         with open(step.storage_dir() / self.metadata_filename, "w+") as f:
             f.write(dumps(metadata) + "\n")
+
+        step.post_run_hook()
