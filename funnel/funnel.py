@@ -400,9 +400,18 @@ class Script(metaclass=TrackSubclassesMeta):
     def add_arguments(self, parser):
         pass
 
-    def _run(self, **kwargs):
+    def cleanup(self):
+        """
+        Called immediately before .run, to clean up from any previous runs of
+        the script. Removes all of .output_path by default.
+
+        Can be overridden to e.g. preserve some files across runs of the script.
+        """
         shutil.rmtree(self.output_path, ignore_errors=True)
-        self.output_path.mkdir(parents=True)
+
+    def _run(self, **kwargs):
+        self.cleanup()
+        self.output_path.mkdir(parents=True, exist_ok=True)
         return self.run(**kwargs)
 
     @abstractmethod
