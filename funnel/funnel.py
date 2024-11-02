@@ -277,6 +277,9 @@ class Step(metaclass=TrackSubclassesMeta):
         # and similarly in _collect_metadata
         # clear metadata on each item, so any add_metadata is fresh
         cls._metadata.clear()
+        output_path = cls.output_path(i, at="top")
+        if output_path.exists():
+            shutil.rmtree(output_path)
         cls.output_path(i, at="item").mkdir(parents=True, exist_ok=True)
 
         # only pass iteration if self.item requests it with a kw-only param
