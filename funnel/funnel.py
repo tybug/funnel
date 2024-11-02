@@ -599,6 +599,21 @@ class Funnel:
                 parent = self._find_step(parent_name)
                 steps.insert(0, parent)
                 step = parent
+            # support both --to-step and (--from-step | --after-step), requiring that
+            # from_step or after_step be a parent of to_step
+            if args.from_step is not None or args.after_step is not None:
+                if args.from_step is not None:
+                    offset = 0
+                    step_name = args.from_step
+                else:
+                    offset = 1
+                    step_name = args.after_step
+
+                step = self._find_step(step_name)
+                assert step in steps
+                idx = steps.index(step)
+                steps = steps[idx + offset :]
+
         elif args.from_step is not None:
             # all steps after (and including) this step.
             step = self._find_step(args.from_step)
