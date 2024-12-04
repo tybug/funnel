@@ -278,8 +278,6 @@ class Step(metaclass=TrackSubclassesMeta):
         # clear metadata on each item, so any add_metadata is fresh
         cls._metadata.clear()
         output_path = cls.output_path(i, at="top")
-        if output_path.exists():
-            shutil.rmtree(output_path)
         cls.output_path(i, at="item").mkdir(parents=True, exist_ok=True)
 
         # only pass iteration if self.item requests it with a kw-only param
@@ -632,6 +630,15 @@ class Funnel:
         for step in steps:
             if args.item_ids:
                 for item_id in args.item_ids:
+                    # when running with --item-ids, we don't run our step cleanup
+                    # logic. this means that item ids may still have lingering
+                    # output paths from previous runs. remove them now.
+                    #
+                    # we do not want to do this in Step.process_item because that
+                    # would clobber any previous iterations.
+                    output_path = step.output_path(item_id, at="top")
+                    if output_path.exists():
+                        shutil.rmtree(output_path)
                     self._run_item(step, item_id)
             else:
                 self._run_step(step, argv, discovery=discovery)
