@@ -693,6 +693,19 @@ class Funnel:
 
     def _run_step(self, step: StepT, argv: list[str], *, discovery_batch=False):
         log.info(f"running step {step.name}")
+        # override values on the Step class with the local nested class if
+        # we're running locally (ie not on discovery).
+        # convention taken after django's meta nested class
+        if hasattr(step, "local") and not discovery:
+            for key, value in step.local.__dict__.items():
+                # skip private attrs
+                if key.startswith("__") or key.endswith("__"):
+                    continue
+                log.info(
+                    f"overriding {step.__qualname__}.{key} with local value {value}"
+                )
+                setattr(step, key, value)
+
         # recreate the directory for this step
         if step.storage_dir().exists():
             log.info(f"removing storage dir {step.storage_dir()}")
