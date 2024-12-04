@@ -457,8 +457,8 @@ class Funnel:
 
         self.argparser = ArgumentParser()
         self.argparser.add_argument(
-            "--discovery-batch",
-            dest="discovery_batch",
+            "--discovery",
+            dest="discovery",
             choices=["true", "false"],
             default=None,
         )
@@ -547,11 +547,11 @@ class Funnel:
             return []
         return self.children_of(self._initial_step, include_parent=True)
 
-    def run(self, argv, *, discovery_batch=False):
+    def run(self, argv, *, discovery=False):
         """
         Parameters
         ----------
-        discovery_batch: bool
+        discovery: bool
             Whether to run this Funnel in batch mode on Northeastern's discovery.
             If True, a batch job will be submitted for each step, with a number
             of single jobs equal to the number of items for that step. Once all
@@ -561,17 +561,17 @@ class Funnel:
             The only step that runs sequentially is the InputStep, because we
             don't know ahead of time how many items there are.
 
-            If discovery_batch is True, you *must* be running this on discovery,
+            If discovery is True, you *must* be running this on discovery,
             as we will attempt to run various discovery-specific commands which
             will error if run on any other system.
 
-            Can be overriden with the --discovery-batch command line argument.
+            Can be overriden with the --discovery command line argument.
         """
         _set_current_funnel(self)
         args, remaining_args = self.argparser.parse_known_args(argv[1:])
 
-        if args.discovery_batch is not None:
-            discovery_batch = args.discovery_batch == "true"
+        if args.discovery is not None:
+            discovery = args.discovery == "true"
 
         if args.script is not None:
             script = self._find_script(args.script)
@@ -634,7 +634,7 @@ class Funnel:
                 for item_id in args.item_ids:
                     self._run_item(step, item_id)
             else:
-                self._run_step(step, argv, discovery_batch=discovery_batch)
+                self._run_step(step, argv, discovery=discovery)
 
     def _input_type(self, step: StepT):
         # input steps don't have an input type
@@ -691,7 +691,7 @@ class Funnel:
         for iteration in iterations:
             step.process_item(val, i, iteration=iteration)
 
-    def _run_step(self, step: StepT, argv: list[str], *, discovery_batch=False):
+    def _run_step(self, step: StepT, argv: list[str], *, discovery=False):
         log.info(f"running step {step.name}")
         # override values on the Step class with the local nested class if
         # we're running locally (ie not on discovery).
@@ -742,7 +742,7 @@ class Funnel:
                     i for i in item_ids if instance.pre_filter(self._input(step, i), i)
                 ]
             item_ids = sorted(item_ids)
-            if discovery_batch:
+            if discovery:
                 # launch the array job for processing this step.
                 caller_file = argv[0]
 
