@@ -137,7 +137,7 @@ SLURM_PARTITION_MAX_TIMES = {
     # hh:mm:ss
     "debug": "00:20:00",
     "express": "00:60:00",
-    "short": "24:00:00",
+    "short": "48:00:00",
 }
 
 
